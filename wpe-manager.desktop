@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Wallpaper Engine Manager
+Comment=Manage Wallpaper Engine backgrounds per screen, with playlists
+Exec=wpe-manager
+Terminal=false
+Categories=Utility;Qt;
+Icon=preferences-desktop-wallpaper
