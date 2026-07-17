@@ -18,7 +18,7 @@ classifiers = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/dragonir/wpe-manager"
+Homepage = "https://github.com/Dragonir44/wpe-manager"
 
 [project.gui-scripts]
 wpe-manager = "wpe_manager.__main__:main"
