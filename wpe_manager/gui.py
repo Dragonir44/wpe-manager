@@ -29,8 +29,13 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
+    QColorDialog,
     QComboBox,
+    QDialog,
+    QDialogButtonBox,
+    QDoubleSpinBox,
     QFileDialog,
+    QFormLayout,
     QFrame,
     QHBoxLayout,
     QInputDialog,
@@ -42,6 +47,7 @@ from PySide6.QtWidgets import (
     QMenu,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QSpinBox,
     QSystemTrayIcon,
     QVBoxLayout,
@@ -329,6 +335,141 @@ class _MetaSyncTask(QRunnable):
 
 
 # --------------------------------------------------------------------------- #
+# Per-wallpaper properties editor
+# --------------------------------------------------------------------------- #
+class PropertiesDialog(QDialog):
+    """Edit a wallpaper's customisable properties. Builds a widget per property
+    type; on accept exposes only the values that differ from the defaults, so
+    the launch command carries the minimum set of --set-property overrides."""
+
+    def __init__(self, parent, wp: Wallpaper, props: list[library.Property],
+                 overrides: dict):
+        super().__init__(parent)
+        self.setWindowTitle(f"Propriétés — {wp.title}")
+        self.resize(480, 620)
+        self.reset_requested = False
+        self._getters: dict[str, tuple[library.Property, object]] = {}
+
+        outer = QVBoxLayout(self)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        content = QWidget()
+        form = QFormLayout(content)
+        form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
+        for p in props:
+            current = overrides.get(p.key, p.default)
+            widget, getter = self._make_widget(p, current)
+            self._getters[p.key] = (p, getter)
+            form.addRow(p.label + " :", widget)
+        scroll.setWidget(content)
+        outer.addWidget(scroll, 1)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok
+            | QDialogButtonBox.StandardButton.Cancel
+            | QDialogButtonBox.StandardButton.Reset
+        )
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        buttons.button(QDialogButtonBox.StandardButton.Reset).clicked.connect(
+            self._on_reset
+        )
+        outer.addWidget(buttons)
+
+    def _on_reset(self) -> None:
+        self.reset_requested = True
+        self.accept()
+
+    # -- widget factory ---------------------------------------------------- #
+    def _make_widget(self, p: library.Property, current):
+        if p.type == "bool":
+            cb = QCheckBox()
+            cb.setChecked(bool(current))
+            return cb, cb.isChecked
+        if p.type == "slider":
+            spin = QDoubleSpinBox()
+            lo = float(p.minimum) if p.minimum is not None else 0.0
+            hi = float(p.maximum) if p.maximum is not None else 100.0
+            spin.setRange(min(lo, hi), max(lo, hi))
+            spin.setDecimals(0 if max(abs(lo), abs(hi)) > 3 else 3)
+            spin.setSingleStep((hi - lo) / 100 if hi > lo else 1)
+            try:
+                spin.setValue(float(current))
+            except (TypeError, ValueError):
+                pass
+            return spin, spin.value
+        if p.type == "combo":
+            combo = QComboBox()
+            for label, value in p.options:
+                combo.addItem(label, value)
+            idx = combo.findData(current)
+            if idx >= 0:
+                combo.setCurrentIndex(idx)
+            return combo, combo.currentData
+        if p.type == "color":
+            return self._color_widget(current)
+        # textinput (and any stray text)
+        edit = QLineEdit("" if current is None else str(current))
+        return edit, edit.text
+
+    def _color_widget(self, current):
+        rgb = self._parse_color(current)
+        btn = QPushButton()
+        state = {"rgb": rgb}
+
+        def refresh():
+            r, g, b = state["rgb"]
+            btn.setStyleSheet(
+                f"background-color: rgb({int(r * 255)},{int(g * 255)},{int(b * 255)});"
+                " min-height: 22px; border: 1px solid palette(mid);"
+            )
+            btn.setText(f"{r:.2f}  {g:.2f}  {b:.2f}")
+
+        def pick():
+            r, g, b = state["rgb"]
+            chosen = QColorDialog.getColor(QColor.fromRgbF(r, g, b), self, "Couleur")
+            if chosen.isValid():
+                state["rgb"] = (chosen.redF(), chosen.greenF(), chosen.blueF())
+                refresh()
+
+        btn.clicked.connect(pick)
+        refresh()
+        return btn, lambda: "{:.6f} {:.6f} {:.6f}".format(*state["rgb"])
+
+    @staticmethod
+    def _parse_color(value) -> tuple[float, float, float]:
+        try:
+            parts = [float(x) for x in str(value).split()][:3]
+        except (TypeError, ValueError):
+            parts = []
+        while len(parts) < 3:
+            parts.append(0.0)
+        return tuple(parts[:3])  # type: ignore[return-value]
+
+    # -- result ------------------------------------------------------------ #
+    def _equal(self, p: library.Property, a, b) -> bool:
+        if p.type == "color":
+            return self._parse_color(a) == self._parse_color(b)
+        if p.type == "slider":
+            try:
+                return abs(float(a) - float(b)) < 1e-9
+            except (TypeError, ValueError):
+                return a == b
+        if p.type == "bool":
+            return bool(a) == bool(b)
+        return a == b
+
+    def changed_values(self) -> dict:
+        """Only the values that differ from each property's default."""
+        out: dict = {}
+        for key, (p, getter) in self._getters.items():
+            value = getter()
+            if not self._equal(p, value, p.default):
+                out[key] = value
+        return out
+
+
+# --------------------------------------------------------------------------- #
 # Main window
 # --------------------------------------------------------------------------- #
 class MainWindow(QMainWindow):
@@ -530,6 +671,14 @@ class MainWindow(QMainWindow):
         self.apply_single_btn.clicked.connect(self._apply_single)
         bar.addWidget(self.apply_single_btn)
 
+        self.props_btn = QPushButton("Propriétés…")
+        self.props_btn.setToolTip(
+            "Personnaliser le fond sélectionné (couleurs, curseurs, options)."
+        )
+        self.props_btn.setEnabled(False)
+        self.props_btn.clicked.connect(self._edit_properties)
+        bar.addWidget(self.props_btn)
+
         self.apply_pl_combo = QComboBox()
         bar.addWidget(self.apply_pl_combo)
         self.apply_pl_btn = QPushButton("Playlist → écran")
@@ -683,9 +832,16 @@ class MainWindow(QMainWindow):
         self.proxy.rowsRemoved.connect(self._update_count)
         self.proxy.modelReset.connect(self._update_count)
         self.model.checked_changed.connect(self._on_checked_changed)
+        self.view.selectionModel().selectionChanged.connect(
+            lambda *_: self._on_selection_changed()
+        )
         self._populate_filter_menus()
         self._update_count()
         self._on_checked_changed()
+        self._on_selection_changed()
+
+    def _on_selection_changed(self) -> None:
+        self.props_btn.setEnabled(self._selected_wallpaper() is not None)
 
     def _on_checked_changed(self) -> None:
         n = len(self.model.checked_ids())
@@ -998,6 +1154,35 @@ class MainWindow(QMainWindow):
             return
         self.controller.assign_single(screen, wp.id)
         self.status.showMessage(f"« {wp.title} » → {screen}", 5000)
+
+    def _edit_properties(self) -> None:
+        wp = self._selected_wallpaper()
+        if wp is None:
+            return
+        props = library.read_properties(wp.folder)
+        if not props:
+            QMessageBox.information(
+                self, "Propriétés",
+                "Ce fond n'expose aucune propriété personnalisable.",
+            )
+            return
+        all_overrides = config.load_properties()
+        dlg = PropertiesDialog(self, wp, props, all_overrides.get(wp.id, {}))
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        new = {} if dlg.reset_requested else dlg.changed_values()
+        if new:
+            all_overrides[wp.id] = new
+        else:
+            all_overrides.pop(wp.id, None)
+        config.save_properties(all_overrides)
+        self.controller.refresh_wallpaper(wp.id)  # live if currently displayed
+        if dlg.reset_requested:
+            self.status.showMessage(f"Propriétés de « {wp.title} » réinitialisées.", 5000)
+        else:
+            self.status.showMessage(
+                f"{len(new)} propriété(s) personnalisée(s) pour « {wp.title} ».", 5000
+            )
 
     def _apply_playlist(self) -> None:
         screen = self._current_screen()

@@ -132,11 +132,20 @@ class RotationController(QObject):
         elif not has_playlist:
             self._timer.stop()
 
-    def _swap(self, screen: str, wid: str) -> None:
+    def refresh_wallpaper(self, wid: str) -> None:
+        """Relaunch any screen currently showing `wid` so new property overrides
+        take effect (the backend applies them only at launch)."""
+        for screen, proc in list(engine.snapshot().items()):
+            if proc.get("id") == wid:
+                self._swap(screen, wid, force=True)
+
+    def _swap(self, screen: str, wid: str, force: bool = False) -> None:
         """Switch one screen to `wid` with an overlap: start the new wallpaper,
-        let it render, then kill the old one — no black gap."""
+        let it render, then kill the old one — no black gap. `force` relaunches
+        even when the same wallpaper is already showing (e.g. after a property
+        change)."""
         old = engine.get_proc(screen)
-        if old and old.get("id") == wid and engine.alive(old.get("pid")):
+        if not force and old and old.get("id") == wid and engine.alive(old.get("pid")):
             return  # already showing it
         new_pid = engine.start_screen(self.cfg, screen, wid)
         engine.register(screen, new_pid, wid)

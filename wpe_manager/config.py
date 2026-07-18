@@ -27,6 +27,8 @@ PLAYLISTS_FILE = CONFIG_DIR / "playlists.json"
 ENGINE_FILE = CONFIG_DIR / "engine.json"
 # Cached Steam Workshop metadata (resolution) keyed by wallpaper id.
 METADATA_FILE = CONFIG_DIR / "metadata.json"
+# Per-wallpaper property overrides: {wallpaper_id: {property_key: value}}.
+PROPERTIES_FILE = CONFIG_DIR / "properties.json"
 
 # Steam roots we know how to look inside, in rough order of likelihood.
 _STEAM_ROOTS = [
@@ -226,6 +228,25 @@ def load_metadata() -> dict[str, dict]:
 def save_metadata(meta: dict[str, dict]) -> None:
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     METADATA_FILE.write_text(json.dumps(meta, indent=2))
+
+
+# --------------------------------------------------------------------------- #
+# Per-wallpaper property overrides
+# --------------------------------------------------------------------------- #
+def load_properties() -> dict[str, dict]:
+    if PROPERTIES_FILE.is_file():
+        try:
+            data = json.loads(PROPERTIES_FILE.read_text())
+            if isinstance(data, dict):
+                return data
+        except (OSError, json.JSONDecodeError):
+            pass
+    return {}
+
+
+def save_properties(data: dict[str, dict]) -> None:
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    PROPERTIES_FILE.write_text(json.dumps(data, indent=2))
 
 
 _WPE_ID_RE = re.compile(r"/431960/(\d+)/")

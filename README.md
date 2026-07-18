@@ -29,6 +29,10 @@ Testé sur KDE Plasma 6 / Wayland (CachyOS), mais ne dépend d'aucune API KDE.
   et **ordre** (séquentiel / aléatoire).
 - **Import depuis Wallpaper Engine** : récupère les playlists du `config.json`
   de WPE (extrait les IDs, ignore les chemins/moniteurs Windows non portables).
+- **Propriétés par fond** : bouton *Propriétés…* pour personnaliser un fond
+  (couleurs, curseurs, cases à cocher, listes de choix). Les réglages sont
+  enregistrés par fond et réappliqués à chaque lancement via `--set-property` ;
+  si le fond est affiché, il se recharge aussitôt.
 - **Transition sans coupure** : le nouveau fond est affiché *par-dessus* l'ancien
   avant que celui-ci soit tué (pas de fondu alpha — le backend ne le permet pas —
   mais plus de flash du fond de bureau entre deux).
@@ -90,6 +94,7 @@ pointer à la main.
 - `~/.config/wpe-manager/playlists.json` — playlists.
 - `~/.config/wpe-manager/engine.json` — process backend en cours (par écran).
 - `~/.config/wpe-manager/metadata.json` — cache des résolutions (Steam Workshop).
+- `~/.config/wpe-manager/properties.json` — propriétés personnalisées par fond.
 
 ## Autostart (restaurer les fonds à l'ouverture de session)
 

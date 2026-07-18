@@ -17,7 +17,7 @@ import os
 import signal
 import subprocess
 
-from . import config
+from . import config, library
 
 BACKEND = "linux-wallpaperengine"
 
@@ -80,9 +80,12 @@ def build_command(cfg: config.Config, screen: str, wid: str) -> list[str]:
         cmd += ["--silent"]
     if cfg.fps and cfg.fps != 30:
         cmd += ["--fps", str(cfg.fps)]
-    library = cfg.library_path
-    target = str(library / wid) if library else wid
+    library_dir = cfg.library_path
+    target = str(library_dir / wid) if library_dir else wid
     cmd += ["--screen-root", screen, "--bg", target]
+    # Per-wallpaper property overrides (color, brightness, toggles, …).
+    for key, value in config.load_properties().get(wid, {}).items():
+        cmd += ["--set-property", f"{key}={library.format_property(value)}"]
     return cmd
 
 
