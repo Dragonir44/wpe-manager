@@ -15,6 +15,14 @@ Testé sur KDE Plasma 6 / Wayland (CachyOS), mais ne dépend d'aucune API KDE.
   le dossier des assets.
 - **Grille de vignettes**, chargées en tâche de fond (fluide même à 500+ fonds).
 - **Recherche** par titre.
+- **Filtres combinés** : genre, type, évaluation d'âge (tout en local depuis
+  `project.json`), **résolution**, et un filtre **« Compatible écran »** qui ne
+  montre que les fonds au bon ratio pour l'écran sélectionné (idéal multi-écran /
+  ultrawide). Tri par titre ou par taille.
+- **Résolution via Steam** : la résolution est un tag Workshop absent des fichiers
+  locaux ; l'app la récupère depuis l'API publique Steam (**sans clé**), la met en
+  cache (`metadata.json`) — instantané et hors-ligne ensuite. Bouton « Sync Steam »
+  et sync auto au premier lancement.
 - **Un process par écran** : changer un écran ne redémarre pas les autres.
 - **Assignation par écran** : un **fond fixe** ou une **playlist tournante**.
 - **Playlists** créées par **cases à cocher** dans la grille, avec **intervalle**
@@ -81,6 +89,7 @@ pointer à la main.
 - `~/.config/wpe-manager/state.json` — assignations par écran (fond / playlist).
 - `~/.config/wpe-manager/playlists.json` — playlists.
 - `~/.config/wpe-manager/engine.json` — process backend en cours (par écran).
+- `~/.config/wpe-manager/metadata.json` — cache des résolutions (Steam Workshop).
 
 ## Autostart (restaurer les fonds à l'ouverture de session)
 
@@ -101,7 +110,6 @@ de cette app.
 ## Idées pour la suite
 
 - Réglage des propriétés par wallpaper (`--list-properties` / `--set-property`).
-- Filtre par type (scene / video / web) et par tag.
 
 ## Remerciements
 

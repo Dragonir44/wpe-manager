@@ -25,6 +25,8 @@ STATE_FILE = CONFIG_DIR / "state.json"
 PLAYLISTS_FILE = CONFIG_DIR / "playlists.json"
 # Tracks the running backend process of each screen: {screen: {"pid", "id"}}.
 ENGINE_FILE = CONFIG_DIR / "engine.json"
+# Cached Steam Workshop metadata (resolution) keyed by wallpaper id.
+METADATA_FILE = CONFIG_DIR / "metadata.json"
 
 # Steam roots we know how to look inside, in rough order of likelihood.
 _STEAM_ROOTS = [
@@ -201,6 +203,29 @@ def load_playlists() -> list[dict]:
 def save_playlists(playlists: list[dict]) -> None:
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     PLAYLISTS_FILE.write_text(json.dumps({"playlists": playlists}, indent=2))
+
+
+# --------------------------------------------------------------------------- #
+# Steam metadata cache (resolution)
+# --------------------------------------------------------------------------- #
+def load_metadata() -> dict[str, dict]:
+    if METADATA_FILE.is_file():
+        try:
+            data = json.loads(METADATA_FILE.read_text())
+            if isinstance(data, dict):
+                # Ignore a pre-"resolutions" cache so the app re-syncs cleanly.
+                entries = [v for v in data.values() if isinstance(v, dict)]
+                if entries and not any("resolutions" in v for v in entries):
+                    return {}
+                return data
+        except (OSError, json.JSONDecodeError):
+            pass
+    return {}
+
+
+def save_metadata(meta: dict[str, dict]) -> None:
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    METADATA_FILE.write_text(json.dumps(meta, indent=2))
 
 
 _WPE_ID_RE = re.compile(r"/431960/(\d+)/")

@@ -2,6 +2,7 @@
 panel (checkbox selection + WPE import), and per-screen assignment."""
 from __future__ import annotations
 
+from collections import Counter
 from pathlib import Path
 
 from PySide6.QtCore import (
@@ -47,8 +48,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from . import config, engine, library
-from .library import Wallpaper
+from . import config, engine, library, steam
+from .library import AGE_LABELS, Wallpaper
 from .rotation import RotationController
 
 THUMB = QSize(240, 135)  # 16:9 thumbnails
@@ -109,10 +110,11 @@ def _placeholder() -> QPixmap:
 
 
 class WallpaperModel(QAbstractListModel):
-    def __init__(self, wallpapers: list[Wallpaper]):
+    def __init__(self, wallpapers: list[Wallpaper], metadata: dict[str, dict] | None = None):
         super().__init__()
         self._items = wallpapers
         self._by_id = {w.id: i for i, w in enumerate(wallpapers)}
+        self._meta = metadata or {}
         self._pixmaps: dict[int, QPixmap] = {}
         self._pending: set[int] = set()
         self._checked: list[str] = []  # wallpaper ids, selection order preserved
@@ -120,6 +122,24 @@ class WallpaperModel(QAbstractListModel):
         self._signals = _ThumbSignals()
         self._signals.done.connect(self._on_thumb)
         self._fallback = _placeholder()
+
+    # Steam metadata (resolution) ------------------------------------------ #
+    def meta_of(self, wid: str) -> dict:
+        return self._meta.get(wid, {})
+
+    def resolutions_of(self, wid: str) -> list[str]:
+        return self._meta.get(wid, {}).get("resolutions", [])
+
+    def resolution_label(self, wid: str) -> str:
+        return ", ".join(self.resolutions_of(wid))
+
+    def set_metadata(self, metadata: dict[str, dict]) -> None:
+        self._meta = metadata
+        if self._items:  # refresh tooltips
+            self.dataChanged.emit(
+                self.index(0), self.index(len(self._items) - 1),
+                [Qt.ItemDataRole.ToolTipRole],
+            )
 
     # Qt model API ---------------------------------------------------------- #
     def rowCount(self, parent=QModelIndex()) -> int:
@@ -139,7 +159,15 @@ class WallpaperModel(QAbstractListModel):
         if role == Qt.ItemDataRole.DisplayRole:
             return wp.title
         if role == Qt.ItemDataRole.ToolTipRole:
-            return f"{wp.title}\nType : {wp.type}\nID : {wp.id}"
+            res = self.resolution_label(wp.id)
+            size = f"{wp.size_bytes / 1e6:.0f} Mo" if wp.size_bytes else "?"
+            lines = [wp.title, f"Type : {wp.type}", f"Taille : {size}"]
+            if res:
+                lines.append(f"Résolution : {res}")
+            if wp.tags:
+                lines.append(f"Tags : {', '.join(wp.tags)}")
+            lines.append(f"ID : {wp.id}")
+            return "\n".join(lines)
         if role == WALLPAPER_ROLE:
             return wp
         if role == Qt.ItemDataRole.CheckStateRole:
@@ -196,6 +224,107 @@ class WallpaperModel(QAbstractListModel):
 
 
 # --------------------------------------------------------------------------- #
+# Combined filtering / sorting
+# --------------------------------------------------------------------------- #
+class WallpaperFilterProxy(QSortFilterProxyModel):
+    """Filters the grid by title, genre, type, age and resolution at once.
+
+    Resolution comes from the source model's Steam metadata (family bucket or a
+    per-screen aspect-ratio match). Items with no known resolution are hidden
+    only while a resolution filter is active — they simply can't match it."""
+
+    _COMPAT_TOL = 0.12  # relative aspect-ratio tolerance for "matches screen"
+    NO_RES = "\x00none"  # sentinel filter value: wallpapers with no resolution tag
+
+    def __init__(self):
+        super().__init__()
+        self.setFilterCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+        self.text = ""
+        self.genres: set[str] = set()
+        self.types: set[str] = set()
+        self.ages: set[str] = set()
+        self.resolutions: set[str] = set()   # exact "W x H" strings (+ NO_RES)
+        self.compat_ratio: float | None = None
+        self.sort_mode = "title"  # "title" | "size_asc" | "size_desc"
+
+    def filterAcceptsRow(self, source_row: int, parent) -> bool:
+        model = self.sourceModel()
+        idx = model.index(source_row, 0, parent)
+        wp = idx.data(WALLPAPER_ROLE)
+        if wp is None:
+            return False
+        if self.text and self.text.casefold() not in wp.title.casefold():
+            return False
+        if self.types and wp.type not in self.types:
+            return False
+        if self.ages and (wp.age or "") not in self.ages:
+            return False
+        if self.genres and not (self.genres & set(wp.tags)):
+            return False
+        wres = model.resolutions_of(wp.id)
+        if self.resolutions:
+            hit = bool(self.resolutions & set(wres))
+            if not hit and self.NO_RES in self.resolutions and not wres:
+                hit = True
+            if not hit:
+                return False
+        if self.compat_ratio is not None:
+            if not any(self._matches_ratio(r) for r in wres):
+                return False
+        return True
+
+    def _matches_ratio(self, res: str) -> bool:
+        w, h = steam.parse_wh(res)
+        if not w or not h:
+            return False
+        return abs(w / h - self.compat_ratio) / self.compat_ratio <= self._COMPAT_TOL
+
+    def lessThan(self, left, right) -> bool:
+        lw = left.data(WALLPAPER_ROLE)
+        rw = right.data(WALLPAPER_ROLE)
+        if lw is None or rw is None:
+            return False
+        if self.sort_mode == "size_asc":
+            return lw.size_bytes < rw.size_bytes
+        if self.sort_mode == "size_desc":
+            return lw.size_bytes > rw.size_bytes
+        return lw.title.casefold() < rw.title.casefold()
+
+    def apply_sort(self) -> None:
+        # Title order == the source order (scan() already sorts by title), so a
+        # -1 sort column restores it without our lessThan; size uses lessThan.
+        self.sort(-1 if self.sort_mode == "title" else 0)
+
+
+# --------------------------------------------------------------------------- #
+# Steam metadata sync (background)
+# --------------------------------------------------------------------------- #
+class _SyncSignals(QObject):
+    progress = Signal(int, int)
+    done = Signal(dict)
+
+
+class _MetaSyncTask(QRunnable):
+    def __init__(self, ids: list[str], signals: _SyncSignals):
+        super().__init__()
+        self._ids = ids
+        self._signals = signals
+
+    def _progress(self, done: int, total: int) -> None:
+        try:
+            self._signals.progress.emit(done, total)
+        except RuntimeError:
+            pass  # window/signals went away (app quit mid-sync)
+
+    def run(self) -> None:
+        try:
+            result = steam.fetch_metadata(self._ids, self._progress)
+            self._signals.done.emit(result)
+        except RuntimeError:
+            pass
+
+
+# --------------------------------------------------------------------------- #
 # Main window
 # --------------------------------------------------------------------------- #
 class MainWindow(QMainWindow):
@@ -207,6 +336,11 @@ class MainWindow(QMainWindow):
         self._loading_pl = False  # guard against edit feedback loops
         self._really_quitting = False
         self._tray_notified = False
+        self.metadata = config.load_metadata()
+        self._syncing = False
+        self._sync_signals = _SyncSignals()
+        self._sync_signals.progress.connect(self._on_sync_progress)
+        self._sync_signals.done.connect(self._on_sync_done)
 
         self.setWindowTitle("Wallpaper Engine Manager")
         self.setWindowIcon(app_icon())
@@ -429,6 +563,44 @@ class MainWindow(QMainWindow):
         bar2.addWidget(self.paths_btn)
         area.addLayout(bar2)
 
+        bar3 = QHBoxLayout()
+        bar3.addWidget(QLabel("Filtres :"))
+        self.genre_btn = QPushButton("Genre")
+        self.type_btn = QPushButton("Type")
+        self.age_btn = QPushButton("Âge")
+        self.res_btn = QPushButton("Résolution")
+        for b in (self.genre_btn, self.type_btn, self.age_btn, self.res_btn):
+            b._base_label = b.text()
+            bar3.addWidget(b)
+        self.compat_check = QCheckBox("Compatible écran")
+        self.compat_check.setToolTip(
+            "N'affiche que les fonds dont le ratio correspond à l'écran "
+            "sélectionné en haut (idéal pour l'ultrawide)."
+        )
+        self.compat_check.toggled.connect(self._on_compat_toggled)
+        bar3.addWidget(self.compat_check)
+        self.reset_filters_btn = QPushButton("Réinitialiser")
+        self.reset_filters_btn.clicked.connect(self._reset_filters)
+        bar3.addWidget(self.reset_filters_btn)
+        bar3.addStretch(1)
+        bar3.addWidget(QLabel("Tri :"))
+        self.sort_combo = QComboBox()
+        self.sort_combo.addItem("Titre A→Z", "title")
+        self.sort_combo.addItem("Taille ↑", "size_asc")
+        self.sort_combo.addItem("Taille ↓", "size_desc")
+        self.sort_combo.currentIndexChanged.connect(self._on_sort_changed)
+        bar3.addWidget(self.sort_combo)
+        self.count_label = QLabel("—")
+        bar3.addWidget(self.count_label)
+        self.sync_btn = QPushButton("Sync Steam")
+        self.sync_btn.setToolTip(
+            "Récupère la résolution des fonds depuis le Workshop Steam "
+            "(sans clé, mise en cache)."
+        )
+        self.sync_btn.clicked.connect(lambda: self._sync_metadata(force=True))
+        bar3.addWidget(self.sync_btn)
+        area.addLayout(bar3)
+
         self.view = QListView()
         self.view.setViewMode(QListView.ViewMode.IconMode)
         self.view.setResizeMode(QListView.ResizeMode.Adjust)
@@ -467,15 +639,172 @@ class MainWindow(QMainWindow):
             )
             return
         wallpapers = library.scan(self.cfg.library_path)
-        self.model = WallpaperModel(wallpapers)
+        self.model = WallpaperModel(wallpapers, self.metadata)
         self._install_model()
         self.status.showMessage(f"{len(wallpapers)} fonds d'écran chargés", 4000)
+        # First run (no cached resolutions): fetch them in the background so the
+        # resolution filters work without the user hunting for the Sync button.
+        missing = [w.id for w in wallpapers if w.id not in self.metadata]
+        if missing and not self.metadata:
+            self._sync_metadata(force=False)
 
     def _install_model(self) -> None:
-        self.proxy = QSortFilterProxyModel()
+        self.proxy = WallpaperFilterProxy()
         self.proxy.setSourceModel(self.model)
-        self.proxy.setFilterCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
         self.view.setModel(self.proxy)
+        self.proxy.rowsInserted.connect(self._update_count)
+        self.proxy.rowsRemoved.connect(self._update_count)
+        self.proxy.modelReset.connect(self._update_count)
+        self._populate_filter_menus()
+        self._update_count()
+
+    # Filters --------------------------------------------------------------- #
+    def _populate_filter_menus(self) -> None:
+        items = getattr(self.model, "_items", [])
+        genres = sorted({t for w in items for t in w.tags}, key=str.casefold)
+        types = sorted({w.type for w in items if w.type})
+        ages = [a for a in ("everyone", "questionable", "mature")
+                if any(w.age == a for w in items)]
+        self._install_menu(self.genre_btn, [(g, g) for g in genres], self.proxy.genres)
+        self._install_menu(self.type_btn,
+                           [(t, t.capitalize()) for t in types], self.proxy.types)
+        self._install_menu(self.age_btn,
+                           [(a, AGE_LABELS.get(a, a)) for a in ages], self.proxy.ages)
+        self._build_resolution_menu()
+
+    def _build_resolution_menu(self) -> None:
+        """The resolution menu is data-driven: it lists the exact resolutions
+        actually present (grouped by family, with counts), so it stays useful
+        whatever the library holds. Rebuilt after a Steam sync; the current
+        selection is preserved across the rebuild."""
+        items = getattr(self.model, "_items", [])
+        counts: Counter = Counter()
+        no_res = 0
+        for w in items:
+            rs = set(self.model.resolutions_of(w.id))
+            if rs:
+                counts.update(rs)
+            else:
+                no_res += 1
+
+        def sort_key(res: str):
+            w, h = steam.parse_wh(res)
+            fam = steam.aspect_family(w, h)
+            fam_rank = steam.FAMILY_ORDER.index(fam) if fam in steam.FAMILY_ORDER else 99
+            return (fam_rank, -(w * h))
+
+        pairs = []
+        for res in sorted(counts, key=sort_key):
+            fam = steam.aspect_family(*steam.parse_wh(res))
+            label = f"{steam.FAMILY_LABELS.get(fam, '?')} — {res}  ({counts[res]})"
+            pairs.append((res, label))
+        if no_res:
+            pairs.append((WallpaperFilterProxy.NO_RES, f"(sans résolution) ({no_res})"))
+
+        keep = set(self.proxy.resolutions)
+        self._install_menu(self.res_btn, pairs, self.proxy.resolutions)
+        if keep:  # restore selection across the rebuild
+            for act in self.res_btn.menu().actions():
+                if act.data() in keep:
+                    act.setChecked(True)
+
+    def _install_menu(self, button, pairs, target_set) -> None:
+        target_set.clear()
+        button.setText(button._base_label)
+        menu = QMenu(button)
+        for value, label in pairs:
+            act = menu.addAction(label)
+            act.setCheckable(True)
+            act.setData(value)
+            act.toggled.connect(
+                lambda on, v=value, s=target_set, b=button: self._toggle_filter(s, v, on, b)
+            )
+        if not pairs:
+            menu.addAction("(aucun)").setEnabled(False)
+        button.setMenu(menu)
+
+    def _toggle_filter(self, target_set: set, value: str, on: bool, button) -> None:
+        target_set.add(value) if on else target_set.discard(value)
+        n = len(target_set)
+        button.setText(f"{button._base_label} ({n})" if n else button._base_label)
+        self.proxy.invalidate()
+        self._update_count()
+
+    def _screen_ratio(self) -> float | None:
+        name = self._current_screen()
+        for screen in QGuiApplication.screens():
+            if screen.name() == name:
+                g = screen.geometry()
+                return g.width() / g.height() if g.height() else None
+        return None
+
+    def _on_compat_toggled(self, on: bool) -> None:
+        self.proxy.compat_ratio = self._screen_ratio() if on else None
+        self.proxy.invalidate()
+        self._update_count()
+
+    def _reset_filters(self) -> None:
+        self.search.clear()
+        self.proxy.text = ""
+        self.compat_check.setChecked(False)
+        for btn, s in ((self.genre_btn, self.proxy.genres),
+                       (self.type_btn, self.proxy.types),
+                       (self.age_btn, self.proxy.ages),
+                       (self.res_btn, self.proxy.resolutions)):
+            s.clear()
+            btn.setText(btn._base_label)
+            for act in (btn.menu().actions() if btn.menu() else []):
+                act.setChecked(False)
+        self.proxy.compat_ratio = None
+        self.proxy.invalidate()
+        self._update_count()
+
+    def _on_sort_changed(self, _i: int) -> None:
+        self.proxy.sort_mode = self.sort_combo.currentData()
+        self.proxy.apply_sort()
+
+    def _update_count(self, *args) -> None:
+        shown = self.proxy.rowCount()
+        total = self.model.rowCount()
+        items = getattr(self.model, "_items", [])
+        no_res = sum(1 for w in items if not self.model.resolutions_of(w.id))
+        extra = f"  ·  {no_res} sans résolution" if no_res else ""
+        self.count_label.setText(f"{shown} / {total}{extra}")
+
+    # Steam metadata sync --------------------------------------------------- #
+    def _sync_metadata(self, force: bool) -> None:
+        if self._syncing:
+            return
+        items = getattr(self.model, "_items", [])
+        ids = ([w.id for w in items] if force
+               else [w.id for w in items if w.id not in self.metadata])
+        if not ids:
+            if force:
+                self.status.showMessage("Aucun fond à synchroniser.", 4000)
+            return
+        self._syncing = True
+        self.sync_btn.setEnabled(False)
+        self.sync_btn.setText("Sync…")
+        self.status.showMessage(f"Sync Steam : 0/{len(ids)}…")
+        QThreadPool.globalInstance().start(_MetaSyncTask(ids, self._sync_signals))
+
+    def _on_sync_progress(self, done: int, total: int) -> None:
+        self.status.showMessage(f"Sync Steam : {done}/{total}…")
+
+    def _on_sync_done(self, result: dict) -> None:
+        self.metadata.update(result)
+        config.save_metadata(self.metadata)
+        self.model.set_metadata(self.metadata)
+        self._build_resolution_menu()  # new resolutions are now known
+        self.proxy.invalidate()
+        self._syncing = False
+        self.sync_btn.setEnabled(True)
+        self.sync_btn.setText("Sync Steam")
+        got = sum(1 for v in result.values() if v.get("resolutions"))
+        self.status.showMessage(
+            f"Sync terminée : {got}/{len(result)} fonds avec résolution taggée.", 6000
+        )
+        self._update_count()
 
     # Playlists panel ------------------------------------------------------- #
     def _refresh_playlists(self) -> None:
@@ -666,6 +995,11 @@ class MainWindow(QMainWindow):
 
     # Options --------------------------------------------------------------- #
     def _on_screen_changed(self, _i: int) -> None:
+        # Keep the "compatible with screen" filter tied to the selected screen.
+        if self.compat_check.isChecked():
+            self.proxy.compat_ratio = self._screen_ratio()
+            self.proxy.invalidate()
+            self._update_count()
         screen = self._current_screen()
         wid = self.controller.current_id(screen) if screen else None
         if not wid:
@@ -679,7 +1013,9 @@ class MainWindow(QMainWindow):
                 break
 
     def _on_search(self, text: str) -> None:
-        self.proxy.setFilterFixedString(text)
+        self.proxy.text = text
+        self.proxy.invalidate()
+        self._update_count()
 
     def _on_silent_changed(self, index: int) -> None:
         self.cfg.silent = index == 1
