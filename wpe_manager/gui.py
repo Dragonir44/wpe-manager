@@ -463,7 +463,12 @@ class MainWindow(QMainWindow):
         v.addWidget(QLabel("<b>Playlists</b>"))
 
         self.pl_list = QListWidget()
+        self.pl_list.setToolTip(
+            "Clic : sélectionner (réglages).\n"
+            "Double-clic : cocher ses fonds dans la grille pour l'éditer."
+        )
         self.pl_list.currentTextChanged.connect(self._on_playlist_selected)
+        self.pl_list.itemDoubleClicked.connect(self._on_playlist_double_clicked)
         v.addWidget(self.pl_list, 1)
 
         self.new_pl_btn = QPushButton("Nouvelle (depuis cochés)")
@@ -881,8 +886,19 @@ class MainWindow(QMainWindow):
         self.order_combo.setCurrentIndex(1 if pl.get("order") == "random" else 0)
         self._loading_pl = False
         self.pl_count.setText(f"{len(pl.get('ids', []))} fonds")
-        # Reflect the playlist's contents as checked items in the grid.
-        self.model.set_checked(pl.get("ids", []))
+
+    def _on_playlist_double_clicked(self, item) -> None:
+        """Load a playlist's wallpapers into the grid checkboxes, so it can be
+        edited (overwrite via « MàJ items ») or forked (« Nouvelle »)."""
+        pl = self.controller.playlists.get(item.text())
+        if not pl:
+            return
+        ids = pl.get("ids", [])
+        self.model.set_checked(ids)
+        self.status.showMessage(
+            f"{len(ids)} fonds de « {item.text()} » cochés — édite puis « MàJ items » "
+            "ou « Nouvelle ».", 6000
+        )
 
     def _create_playlist(self) -> None:
         ids = self.model.checked_ids()
