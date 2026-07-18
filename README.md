@@ -54,23 +54,34 @@ Testé sur KDE Plasma 6 / Wayland (CachyOS), mais ne dépend d'aucune API KDE.
 
 ## Installation
 
+### Toute distribution (PyPI)
+
 ```bash
-# depuis une copie du dépôt
-pipx install .        # recommandé (environnement isolé)
+pipx install wpe-manager     # recommandé (environnement isolé)
 # ou
-pip install --user .
+pip install --user wpe-manager
+```
+
+### Arch / CachyOS / dérivés (AUR)
+
+```bash
+paru -S wpe-manager          # ou : yay -S wpe-manager
+```
+
+Le paquet AUR tire le backend `linux-wallpaperengine-git` automatiquement.
+
+### Depuis les sources
+
+```bash
+pipx install .               # ou : pip install --user .
+# ou sans installer :
+python -m wpe_manager
 ```
 
 Puis lance la commande :
 
 ```bash
 wpe-manager
-```
-
-Sans installer, directement depuis les sources :
-
-```bash
-python -m wpe_manager
 ```
 
 ## Utilisation
@@ -112,16 +123,20 @@ lanceur dans le menu de ton bureau (`~/.local/share/applications/`) et ouvrir
 l'app comme n'importe quel programme. Fonctionne aussi bien depuis une
 installation pip/pipx que depuis les sources.
 
-## Limite connue
+## Compatibilité & limites connues
 
-Comme tout ce qui repose sur `linux-wallpaperengine`, le fond est dessiné
-**par-dessus** le bureau sous Wayland : pas d'icônes de bureau ni de clic droit
-sur le bureau tant qu'un fond animé est actif. C'est une limite du backend, pas
-de cette app.
+Cette app n'est qu'un frontend ; ce qui fonctionne dépend surtout du backend.
 
-## Idées pour la suite
-
-- Réglage des propriétés par wallpaper (`--list-properties` / `--set-property`).
+- **Backend requis** : `linux-wallpaperengine` doit être installé et dans le
+  `PATH`. Il est packagé sur l'AUR ; sur Debian/Fedora/etc. il faut le
+  **compiler depuis les sources**.
+- **Bureau** : testé sur **KDE Plasma / Wayland**. Fonctionne sur les
+  compositeurs qui supportent `wlr-layer-shell` (KWin, wlroots) et sous X11.
+  **GNOME Wayland (Mutter) n'implémente pas layer-shell** → le backend ne peut
+  pas y dessiner le fond ; c'est une limite du compositeur, pas de cette app.
+- **Wayland** : le fond est dessiné **par-dessus** le bureau → pas d'icônes ni
+  de clic droit sur le bureau tant qu'un fond animé est actif (limite du
+  backend).
 
 ## Remerciements
 

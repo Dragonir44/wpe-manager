@@ -1,0 +1,18 @@
+pkgbase = wpe-manager
+	pkgdesc = Native GUI over linux-wallpaperengine: per-screen assignment & playlist rotation
+	pkgver = 0.5.0
+	pkgrel = 1
+	url = https://github.com/Dragonir44/wpe-manager
+	arch = any
+	license = MIT
+	makedepends = python-build
+	makedepends = python-installer
+	makedepends = python-setuptools
+	makedepends = python-wheel
+	depends = python
+	depends = pyside6
+	depends = linux-wallpaperengine-git
+	source = https://files.pythonhosted.org/packages/source/w/wpe_manager/wpe_manager-0.5.0.tar.gz
+	sha256sums = 5499d1a2ff63a581d31d3c94ce0c006714e6570d03d6602e2c17d05525f41bdf
+
+pkgname = wpe-manager
