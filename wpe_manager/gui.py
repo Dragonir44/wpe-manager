@@ -428,6 +428,10 @@ class MainWindow(QMainWindow):
         auto.setCheckable(True)
         auto.setChecked(config.is_autostart_enabled())
         auto.toggled.connect(self._set_autostart)
+        launcher = menu.addAction("Ajouter au menu des applications")
+        launcher.setCheckable(True)
+        launcher.setChecked(config.is_launcher_installed())
+        launcher.toggled.connect(self._set_launcher)
         menu.addSeparator()
         quit_act = menu.addAction("Quitter")
         quit_act.triggered.connect(self._quit_app)
@@ -529,6 +533,14 @@ class MainWindow(QMainWindow):
         self.autostart_check.setChecked(config.is_autostart_enabled())
         self.autostart_check.toggled.connect(self._set_autostart)
         bar.addWidget(self.autostart_check)
+        self.launcher_check = QCheckBox("Menu applications")
+        self.launcher_check.setToolTip(
+            "Ajoute une entrée dans le menu des applications pour lancer "
+            "l'app comme n'importe quel programme."
+        )
+        self.launcher_check.setChecked(config.is_launcher_installed())
+        self.launcher_check.toggled.connect(self._set_launcher)
+        bar.addWidget(self.launcher_check)
         self.stop_btn = QPushButton("Tout arrêter")
         self.stop_btn.clicked.connect(self.controller.stop_all)
         bar.addWidget(self.stop_btn)
@@ -971,6 +983,13 @@ class MainWindow(QMainWindow):
             self.autostart_check.blockSignals(True)
             self.autostart_check.setChecked(enabled)
             self.autostart_check.blockSignals(False)
+
+    def _set_launcher(self, enabled: bool) -> None:
+        config.set_launcher(bool(enabled))
+        if hasattr(self, "launcher_check") and self.launcher_check.isChecked() != enabled:
+            self.launcher_check.blockSignals(True)
+            self.launcher_check.setChecked(enabled)
+            self.launcher_check.blockSignals(False)
 
     def closeEvent(self, event) -> None:
         """Closing the window hides it to the tray so rotation keeps running.

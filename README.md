@@ -100,6 +100,13 @@ Sous le capot, l'entrée lance `wpe-manager --daemon` (alias historique :
 `--autostart`) : l'app démarre **cachée dans la barre système**, restaure les
 fonds sauvegardés et **reprend la rotation**.
 
+## Entrée dans le menu des applications
+
+Coche **Menu applications** (barre du haut ou menu du tray) pour ajouter un
+lanceur dans le menu de ton bureau (`~/.local/share/applications/`) et ouvrir
+l'app comme n'importe quel programme. Fonctionne aussi bien depuis une
+installation pip/pipx que depuis les sources.
+
 ## Limite connue
 
 Comme tout ce qui repose sur `linux-wallpaperengine`, le fond est dessiné

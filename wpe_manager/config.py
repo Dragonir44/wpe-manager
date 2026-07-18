@@ -280,43 +280,62 @@ def wpe_config_path(cfg: "Config") -> Path | None:
 
 
 # --------------------------------------------------------------------------- #
-# Autostart (resume rotation at session login)
+# Desktop integration (autostart + application-menu launcher)
 # --------------------------------------------------------------------------- #
 _AUTOSTART_DIR = Path(
     os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")
 ) / "autostart"
 AUTOSTART_FILE = _AUTOSTART_DIR / "wpe-manager.desktop"
 
+_APPLICATIONS_DIR = Path(
+    os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share")
+) / "applications"
+LAUNCHER_FILE = _APPLICATIONS_DIR / "wpe-manager.desktop"
 
-def _daemon_exec() -> str:
-    """Command line the autostart entry runs to start the tray daemon.
 
-    We invoke the current interpreter with `-m wpe_manager --daemon`, which
-    works both for a pipx/pip install (its venv python) and a source checkout.
+def _module_exec(args: str = "") -> str:
+    """Command line to (re)launch the app via the current interpreter.
+
+    `<python> -m wpe_manager [args]` works both for a pipx/pip install (its venv
+    python) and a source checkout.
     """
-    return f"{shlex.quote(sys.executable)} -m wpe_manager --daemon"
+    base = f"{shlex.quote(sys.executable)} -m wpe_manager"
+    return f"{base} {args}".strip()
 
 
+def _workdir() -> Path:
+    """Directory containing the wpe_manager package, used as the entry's Path so
+    `-m wpe_manager` resolves even from a source checkout (cwd would be $HOME)."""
+    return Path(__file__).resolve().parent.parent
+
+
+def _write_desktop_entry(path: Path, exec_line: str, comment: str,
+                         extra: str = "") -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "[Desktop Entry]\n"
+        "Type=Application\n"
+        "Name=Wallpaper Engine Manager\n"
+        f"Exec={exec_line}\n"
+        f"Path={_workdir()}\n"
+        "Icon=preferences-desktop-wallpaper\n"
+        f"Comment={comment}\n"
+        + extra
+    )
+
+
+# -- autostart --------------------------------------------------------------- #
 def is_autostart_enabled() -> bool:
     return AUTOSTART_FILE.is_file()
 
 
 def install_autostart() -> None:
     """Write a freedesktop autostart entry that launches the tray daemon."""
-    _AUTOSTART_DIR.mkdir(parents=True, exist_ok=True)
-    # Working dir = the directory that contains the wpe_manager package, so
-    # `-m wpe_manager` resolves whether the app is pip-installed or run from a
-    # source checkout (where the autostart cwd would otherwise be $HOME).
-    workdir = Path(__file__).resolve().parent.parent
-    AUTOSTART_FILE.write_text(
-        "[Desktop Entry]\n"
-        "Type=Application\n"
-        "Name=Wallpaper Engine Manager\n"
-        f"Exec={_daemon_exec()}\n"
-        f"Path={workdir}\n"
-        "Icon=preferences-desktop-wallpaper\n"
-        "Comment=Restaure et fait tourner les fonds d'écran au démarrage\n"
-        "X-GNOME-Autostart-enabled=true\n"
+    _write_desktop_entry(
+        AUTOSTART_FILE,
+        _module_exec("--daemon"),
+        "Restaure et fait tourner les fonds d'écran au démarrage",
+        extra="X-GNOME-Autostart-enabled=true\n",
     )
 
 
@@ -326,3 +345,26 @@ def remove_autostart() -> None:
 
 def set_autostart(enabled: bool) -> None:
     install_autostart() if enabled else remove_autostart()
+
+
+# -- application-menu launcher ---------------------------------------------- #
+def is_launcher_installed() -> bool:
+    return LAUNCHER_FILE.is_file()
+
+
+def install_launcher() -> None:
+    """Write a launcher into the application menu (KDE/GNOME/etc.)."""
+    _write_desktop_entry(
+        LAUNCHER_FILE,
+        _module_exec(),
+        "Gérer les fonds d'écran animés (Wallpaper Engine)",
+        extra="Terminal=false\nCategories=Utility;Settings;\nStartupNotify=true\n",
+    )
+
+
+def remove_launcher() -> None:
+    LAUNCHER_FILE.unlink(missing_ok=True)
+
+
+def set_launcher(enabled: bool) -> None:
+    install_launcher() if enabled else remove_launcher()
