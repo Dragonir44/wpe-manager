@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "wpe-manager"
-version = "0.4.1"
+version = "0.4.2"
 description = "A fast, native GUI over linux-wallpaperengine with per-screen assignment and playlist rotation"
 readme = "README.md"
 requires-python = ">=3.10"

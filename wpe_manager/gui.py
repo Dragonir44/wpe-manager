@@ -110,6 +110,8 @@ def _placeholder() -> QPixmap:
 
 
 class WallpaperModel(QAbstractListModel):
+    checked_changed = Signal()  # emitted whenever the set of checked ids changes
+
     def __init__(self, wallpapers: list[Wallpaper], metadata: dict[str, dict] | None = None):
         super().__init__()
         self._items = wallpapers
@@ -188,6 +190,7 @@ class WallpaperModel(QAbstractListModel):
             elif not checked and wid in self._checked:
                 self._checked.remove(wid)
             self.dataChanged.emit(index, index, [role])
+            self.checked_changed.emit()
             return True
         return False
 
@@ -202,6 +205,7 @@ class WallpaperModel(QAbstractListModel):
                 self.index(0), self.index(len(self._items) - 1),
                 [Qt.ItemDataRole.CheckStateRole],
             )
+        self.checked_changed.emit()
 
     def clear_checks(self) -> None:
         self.set_checked([])
@@ -470,6 +474,12 @@ class MainWindow(QMainWindow):
         self.update_pl_btn.clicked.connect(self._update_playlist_items)
         v.addWidget(self.update_pl_btn)
 
+        self.uncheck_btn = QPushButton("Tout décocher")
+        self.uncheck_btn.setToolTip("Décoche tous les fonds de la grille.")
+        self.uncheck_btn.setEnabled(False)
+        self.uncheck_btn.clicked.connect(lambda: self.model.clear_checks())
+        v.addWidget(self.uncheck_btn)
+
         self.del_pl_btn = QPushButton("Supprimer")
         self.del_pl_btn.clicked.connect(self._delete_playlist)
         v.addWidget(self.del_pl_btn)
@@ -667,8 +677,15 @@ class MainWindow(QMainWindow):
         self.proxy.rowsInserted.connect(self._update_count)
         self.proxy.rowsRemoved.connect(self._update_count)
         self.proxy.modelReset.connect(self._update_count)
+        self.model.checked_changed.connect(self._on_checked_changed)
         self._populate_filter_menus()
         self._update_count()
+        self._on_checked_changed()
+
+    def _on_checked_changed(self) -> None:
+        n = len(self.model.checked_ids())
+        self.uncheck_btn.setText(f"Tout décocher ({n})" if n else "Tout décocher")
+        self.uncheck_btn.setEnabled(n > 0)
 
     # Filters --------------------------------------------------------------- #
     def _populate_filter_menus(self) -> None:
@@ -753,7 +770,24 @@ class MainWindow(QMainWindow):
     def _on_compat_toggled(self, on: bool) -> None:
         self.proxy.compat_ratio = self._screen_ratio() if on else None
         self.proxy.invalidate()
+        self._prune_incompatible_checks()
         self._update_count()
+
+    def _prune_incompatible_checks(self) -> None:
+        """While "Compatible écran" is on, drop any checked wallpaper that no
+        longer fits the selected screen — so switching screens doesn't carry
+        over incompatible picks."""
+        if not self.compat_check.isChecked() or self.proxy.compat_ratio is None:
+            return
+        checked = self.model.checked_ids()
+        keep = [wid for wid in checked
+                if any(self.proxy._matches_ratio(r)
+                       for r in self.model.resolutions_of(wid))]
+        if len(keep) != len(checked):
+            self.model.set_checked(keep)
+            self.status.showMessage(
+                f"{len(checked) - len(keep)} fond(s) incompatible(s) décoché(s).", 4000
+            )
 
     def _reset_filters(self) -> None:
         self.search.clear()
@@ -1018,6 +1052,7 @@ class MainWindow(QMainWindow):
         if self.compat_check.isChecked():
             self.proxy.compat_ratio = self._screen_ratio()
             self.proxy.invalidate()
+            self._prune_incompatible_checks()
             self._update_count()
         screen = self._current_screen()
         wid = self.controller.current_id(screen) if screen else None
