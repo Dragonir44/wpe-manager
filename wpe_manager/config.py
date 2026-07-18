@@ -10,6 +10,8 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
+import sys
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
@@ -250,3 +252,52 @@ def wpe_config_path(cfg: "Config") -> Path | None:
         return None
     candidate = assets.parent / "config.json"  # .../wallpaper_engine/config.json
     return candidate if candidate.is_file() else None
+
+
+# --------------------------------------------------------------------------- #
+# Autostart (resume rotation at session login)
+# --------------------------------------------------------------------------- #
+_AUTOSTART_DIR = Path(
+    os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")
+) / "autostart"
+AUTOSTART_FILE = _AUTOSTART_DIR / "wpe-manager.desktop"
+
+
+def _daemon_exec() -> str:
+    """Command line the autostart entry runs to start the tray daemon.
+
+    We invoke the current interpreter with `-m wpe_manager --daemon`, which
+    works both for a pipx/pip install (its venv python) and a source checkout.
+    """
+    return f"{shlex.quote(sys.executable)} -m wpe_manager --daemon"
+
+
+def is_autostart_enabled() -> bool:
+    return AUTOSTART_FILE.is_file()
+
+
+def install_autostart() -> None:
+    """Write a freedesktop autostart entry that launches the tray daemon."""
+    _AUTOSTART_DIR.mkdir(parents=True, exist_ok=True)
+    # Working dir = the directory that contains the wpe_manager package, so
+    # `-m wpe_manager` resolves whether the app is pip-installed or run from a
+    # source checkout (where the autostart cwd would otherwise be $HOME).
+    workdir = Path(__file__).resolve().parent.parent
+    AUTOSTART_FILE.write_text(
+        "[Desktop Entry]\n"
+        "Type=Application\n"
+        "Name=Wallpaper Engine Manager\n"
+        f"Exec={_daemon_exec()}\n"
+        f"Path={workdir}\n"
+        "Icon=preferences-desktop-wallpaper\n"
+        "Comment=Restaure et fait tourner les fonds d'écran au démarrage\n"
+        "X-GNOME-Autostart-enabled=true\n"
+    )
+
+
+def remove_autostart() -> None:
+    AUTOSTART_FILE.unlink(missing_ok=True)
+
+
+def set_autostart(enabled: bool) -> None:
+    install_autostart() if enabled else remove_autostart()

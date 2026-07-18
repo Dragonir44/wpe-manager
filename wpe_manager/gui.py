@@ -15,8 +15,19 @@ from PySide6.QtCore import (
     QThreadPool,
     Signal,
 )
-from PySide6.QtGui import QColor, QGuiApplication, QImage, QPixmap
+from PySide6.QtGui import (
+    QAction,
+    QActionGroup,
+    QColor,
+    QGuiApplication,
+    QIcon,
+    QImage,
+    QPainter,
+    QPixmap,
+)
 from PySide6.QtWidgets import (
+    QApplication,
+    QCheckBox,
     QComboBox,
     QFileDialog,
     QFrame,
@@ -27,9 +38,11 @@ from PySide6.QtWidgets import (
     QListView,
     QListWidget,
     QMainWindow,
+    QMenu,
     QMessageBox,
     QPushButton,
     QSpinBox,
+    QSystemTrayIcon,
     QVBoxLayout,
     QWidget,
 )
@@ -40,6 +53,26 @@ from .rotation import RotationController
 
 THUMB = QSize(240, 135)  # 16:9 thumbnails
 WALLPAPER_ROLE = Qt.ItemDataRole.UserRole + 1
+
+
+def app_icon() -> QIcon:
+    """The app/tray icon: the KDE wallpaper theme icon, or a drawn fallback."""
+    themed = QIcon.fromTheme("preferences-desktop-wallpaper")
+    if not themed.isNull():
+        return themed
+    pm = QPixmap(64, 64)
+    pm.fill(Qt.GlobalColor.transparent)
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing)
+    p.setPen(Qt.PenStyle.NoPen)
+    p.setBrush(QColor(72, 118, 214))
+    p.drawRoundedRect(6, 6, 52, 52, 12, 12)
+    p.setBrush(QColor(245, 210, 90))
+    p.drawEllipse(16, 14, 16, 16)  # a little "sun"
+    p.setBrush(QColor(255, 255, 255, 210))
+    p.drawEllipse(30, 34, 22, 22)  # a "moon/cloud"
+    p.end()
+    return QIcon(pm)
 
 
 # --------------------------------------------------------------------------- #
@@ -172,14 +205,104 @@ class MainWindow(QMainWindow):
         self.controller = RotationController(cfg)
         self.controller.changed.connect(self._refresh_status)
         self._loading_pl = False  # guard against edit feedback loops
+        self._really_quitting = False
+        self._tray_notified = False
 
         self.setWindowTitle("Wallpaper Engine Manager")
+        self.setWindowIcon(app_icon())
         self.resize(1180, 720)
 
         self._build_ui()
+        self._build_tray()
         self._reload_library()
         self._refresh_playlists()
         self._refresh_status()
+
+    # System tray ---------------------------------------------------------- #
+    def _build_tray(self) -> None:
+        """A tray icon that keeps the app (and its rotation) alive when the
+        window is closed, and lets the user switch playlists per screen."""
+        self._tray = None
+        if not QSystemTrayIcon.isSystemTrayAvailable():
+            return
+        self._tray = QSystemTrayIcon(app_icon(), self)
+        self._tray.setToolTip("Wallpaper Engine Manager")
+        menu = QMenu()
+        menu.aboutToShow.connect(self._rebuild_tray_menu)
+        self._tray.setContextMenu(menu)
+        self._tray.activated.connect(self._on_tray_activated)
+        self._rebuild_tray_menu()
+        self._tray.show()
+
+    def _on_tray_activated(self, reason) -> None:
+        # Left-click / double-click toggles the window.
+        if reason in (
+            QSystemTrayIcon.ActivationReason.Trigger,
+            QSystemTrayIcon.ActivationReason.DoubleClick,
+        ):
+            self._toggle_window()
+
+    def _toggle_window(self) -> None:
+        if self.isVisible() and not self.isMinimized():
+            self.hide()
+        else:
+            self.showNormal()
+            self.raise_()
+            self.activateWindow()
+
+    def _rebuild_tray_menu(self) -> None:
+        if self._tray is None:
+            return
+        menu = self._tray.contextMenu()
+        menu.clear()
+
+        title = menu.addAction("Wallpaper Engine Manager")
+        title.setEnabled(False)
+        menu.addSeparator()
+
+        names = self.controller.playlist_names()
+        for i in range(self.screen_combo.count()):
+            screen = self.screen_combo.itemData(i)
+            sub = menu.addMenu(f"{screen} — {self.controller.describe(screen)}")
+            group = QActionGroup(sub)
+            group.setExclusive(True)
+            assigned = self.controller.assignments.get(screen, {})
+            for name in names:
+                act = sub.addAction(name)
+                act.setCheckable(True)
+                act.setChecked(
+                    assigned.get("mode") == "playlist"
+                    and assigned.get("playlist") == name
+                )
+                act.triggered.connect(
+                    lambda _c, s=screen, n=name: self.controller.assign_playlist(s, n)
+                )
+                group.addAction(act)
+            if not names:
+                empty = sub.addAction("(aucune playlist)")
+                empty.setEnabled(False)
+            sub.addSeparator()
+            clear = sub.addAction("Vider l'écran")
+            clear.triggered.connect(lambda _c, s=screen: self.controller.clear(s))
+
+        menu.addSeparator()
+        show = menu.addAction("Ouvrir la fenêtre")
+        show.triggered.connect(self._toggle_window)
+        stop = menu.addAction("Tout arrêter")
+        stop.triggered.connect(self.controller.stop_all)
+        auto = menu.addAction("Démarrer avec la session")
+        auto.setCheckable(True)
+        auto.setChecked(config.is_autostart_enabled())
+        auto.toggled.connect(self._set_autostart)
+        menu.addSeparator()
+        quit_act = menu.addAction("Quitter")
+        quit_act.triggered.connect(self._quit_app)
+
+    def _quit_app(self) -> None:
+        self._really_quitting = True
+        if self._tray is not None:
+            self._tray.hide()
+        QApplication.quit()
 
     # UI construction ------------------------------------------------------ #
     def _build_ui(self) -> None:
@@ -264,6 +387,14 @@ class MainWindow(QMainWindow):
         self.clear_btn.clicked.connect(self._clear_selected)
         bar.addWidget(self.clear_btn)
         bar.addStretch(1)
+        self.autostart_check = QCheckBox("Démarrer avec la session")
+        self.autostart_check.setToolTip(
+            "Relance l'app dans la barre système et restaure les fonds "
+            "d'écran (rotation comprise) à l'ouverture de session."
+        )
+        self.autostart_check.setChecked(config.is_autostart_enabled())
+        self.autostart_check.toggled.connect(self._set_autostart)
+        bar.addWidget(self.autostart_check)
         self.stop_btn = QPushButton("Tout arrêter")
         self.stop_btn.clicked.connect(self.controller.stop_all)
         bar.addWidget(self.stop_btn)
@@ -499,6 +630,39 @@ class MainWindow(QMainWindow):
             parts.append(f"{name} → {self.controller.describe(name)}")
         running = "▶ en cours" if engine.is_running() else "■ arrêté"
         self.setWindowTitle(f"Wallpaper Engine Manager — {running}   [{'  |  '.join(parts)}]")
+        if getattr(self, "_tray", None) is not None:
+            self._tray.setToolTip(
+                "Wallpaper Engine Manager\n" + "\n".join(parts)
+            )
+
+    def _set_autostart(self, enabled: bool) -> None:
+        config.set_autostart(bool(enabled))
+        # Keep the GUI checkbox and the tray menu in sync with each other.
+        if hasattr(self, "autostart_check") and self.autostart_check.isChecked() != enabled:
+            self.autostart_check.blockSignals(True)
+            self.autostart_check.setChecked(enabled)
+            self.autostart_check.blockSignals(False)
+
+    def closeEvent(self, event) -> None:
+        """Closing the window hides it to the tray so rotation keeps running.
+
+        A real exit goes through the tray's « Quitter » entry. If there's no
+        system tray, closing quits normally (otherwise the app would be
+        unreachable)."""
+        if self._really_quitting or getattr(self, "_tray", None) is None:
+            event.accept()
+            return
+        event.ignore()
+        self.hide()
+        if not self._tray_notified:
+            self._tray_notified = True
+            self._tray.showMessage(
+                "Wallpaper Engine Manager",
+                "L'app reste dans la barre système ; la rotation continue. "
+                "Clic sur l'icône pour rouvrir, clic droit → Quitter pour fermer.",
+                app_icon(),
+                5000,
+            )
 
     # Options --------------------------------------------------------------- #
     def _on_screen_changed(self, _i: int) -> None:

@@ -24,6 +24,12 @@ Testé sur KDE Plasma 6 / Wayland (CachyOS), mais ne dépend d'aucune API KDE.
 - **Transition sans coupure** : le nouveau fond est affiché *par-dessus* l'ancien
   avant que celui-ci soit tué (pas de fondu alpha — le backend ne le permet pas —
   mais plus de flash du fond de bureau entre deux).
+- **Barre système (systray)** : fermer la fenêtre la réduit dans le tray ; la
+  **rotation continue** en arrière-plan. Le menu de l'icône permet de changer la
+  playlist de chaque écran, de vider un écran, de tout arrêter, et de rouvrir.
+- **Démarrage avec la session** : une case (ou l'entrée du menu tray) installe
+  un lanceur autostart qui relance l'app dans le tray et **restaure les fonds
+  (rotation comprise)** à l'ouverture de session.
 - **Options** : muet, FPS, durée de transition (ms).
 
 ## Prérequis
@@ -66,8 +72,8 @@ python -m wpe_manager
 Si la bibliothèque n'est pas trouvée automatiquement, bouton **Chemins…** pour la
 pointer à la main.
 
-> La rotation avance tant que l'application est ouverte (un `QTimer` la pilote).
-> Un mode systray/daemon pour la faire survivre en arrière-plan est prévu.
+> Fermer la fenêtre la **réduit dans la barre système** : la rotation continue.
+> Clic sur l'icône pour rouvrir, clic droit → **Quitter** pour fermer réellement.
 
 ## Fichiers de config
 
@@ -78,16 +84,12 @@ pointer à la main.
 
 ## Autostart (restaurer les fonds à l'ouverture de session)
 
-`wpe-manager --autostart` relit l'état sauvegardé et relance le backend (sans
-fenêtre). Crée `~/.config/autostart/wpe-manager.desktop` :
+Le plus simple : coche **Démarrer avec la session** (barre du haut ou menu du
+tray). L'app écrit `~/.config/autostart/wpe-manager.desktop` pour toi.
 
-```ini
-[Desktop Entry]
-Type=Application
-Name=Wallpaper Engine Manager (autostart)
-Exec=wpe-manager --autostart
-X-KDE-autostart-phase=2
-```
+Sous le capot, l'entrée lance `wpe-manager --daemon` (alias historique :
+`--autostart`) : l'app démarre **cachée dans la barre système**, restaure les
+fonds sauvegardés et **reprend la rotation**.
 
 ## Limite connue
 
@@ -98,7 +100,6 @@ de cette app.
 
 ## Idées pour la suite
 
-- Icône systray + mode daemon (rotation persistante, reprise au démarrage).
 - Réglage des propriétés par wallpaper (`--list-properties` / `--set-property`).
 - Filtre par type (scene / video / web) et par tag.
 
