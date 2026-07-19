@@ -83,18 +83,19 @@ QComboBox QAbstractItemView {{
     outline: 0;
 }}
 
-/* --- panels --- */
-QFrame#playlistPanel {{
+/* --- bottom playlist bar --- */
+QFrame#playlistBar {{
     background: {PANEL}; border: 1px solid #33373e; border-radius: 10px;
 }}
-QListWidget {{
-    background: #1e2126; color: {TEXT};
-    border: 1px solid #33373e; border-radius: 8px; padding: 4px;
-    outline: 0;
+QLabel#plHead {{ font-weight: 600; }}
+QLabel#plCount {{ color: {MUTED}; }}
+QScrollArea#checksStrip {{
+    background: {GRID_BG}; border: 1px solid {BORDER}; border-radius: 6px;
 }}
-QListWidget::item {{ padding: 6px 8px; border-radius: 6px; }}
-QListWidget::item:hover {{ background: {SURFACE_HI}; }}
-QListWidget::item:selected {{ background: {ACCENT}; color: {ON_ACCENT}; }}
+QScrollArea#checksStrip QWidget {{ background: transparent; }}
+QLabel#stripEmpty {{ color: {MUTED}; padding: 0 4px; }}
+QLabel#stripThumb {{ border: 1px solid {BORDER}; border-radius: 3px; }}
+QLabel#stripThumb:hover {{ border: 2px solid {DANGER}; }}
 
 /* --- the thumbnail grid --- */
 QListView#grid {{

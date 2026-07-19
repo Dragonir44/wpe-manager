@@ -51,7 +51,6 @@ from PySide6.QtWidgets import (
     QLayout,
     QLineEdit,
     QListView,
-    QListWidget,
     QMainWindow,
     QMenu,
     QMessageBox,
@@ -687,6 +686,102 @@ class PropertyForm(QWidget):
 
 
 # --------------------------------------------------------------------------- #
+# Bottom playlist strip
+# --------------------------------------------------------------------------- #
+class _StripThumb(QLabel):
+    """A clickable thumbnail in the playlist strip; clicking removes it."""
+    clicked = Signal(str)
+
+    def __init__(self, wid: str, pm: QPixmap):
+        super().__init__()
+        self._wid = wid
+        if isinstance(pm, QPixmap) and not pm.isNull():
+            self.setPixmap(pm)
+        self.setObjectName("stripThumb")
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+    def mousePressEvent(self, event) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit(self._wid)
+
+
+class ChecksStrip(QScrollArea):
+    """Horizontal strip of the currently checked wallpapers (the working
+    playlist), WPE-style. Click a thumbnail to remove it from the selection."""
+
+    THUMB_H = 58
+
+    def __init__(self):
+        super().__init__()
+        self._model: WallpaperModel | None = None
+        self.setObjectName("checksStrip")
+        self.setWidgetResizable(True)
+        self.setFixedHeight(self.THUMB_H + 16)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._inner = QWidget()
+        self._row = QHBoxLayout(self._inner)
+        self._row.setContentsMargins(6, 4, 6, 4)
+        self._row.setSpacing(5)
+        self._row.addStretch(1)
+        self.setWidget(self._inner)
+
+    def set_model(self, model: WallpaperModel) -> None:
+        self._model = model
+        model.checked_changed.connect(self.refresh)
+        model.dataChanged.connect(self._on_data)
+        self.refresh()
+
+    def _on_data(self, tl, br, roles) -> None:
+        # only rebuild if a *checked* row's thumbnail just arrived
+        if self._model is None:
+            return
+        if roles and Qt.ItemDataRole.DecorationRole not in roles:
+            return
+        rows = {self._model._by_id[i] for i in self._model.checked_ids()
+                if i in self._model._by_id}
+        if any(tl.row() <= r <= br.row() for r in rows):
+            self.refresh()
+
+    def refresh(self) -> None:
+        if self._model is None:
+            return
+        while self._row.count() > 1:  # keep the trailing stretch
+            item = self._row.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.setParent(None)
+                w.deleteLater()
+        ids = self._model.checked_ids()
+        if not ids:
+            empty = QLabel("Aucun fond coché — coche des fonds dans la grille "
+                           "pour composer une playlist.")
+            empty.setObjectName("stripEmpty")
+            self._row.insertWidget(0, empty)
+            return
+        for wid in ids:
+            row = self._model._by_id.get(wid)
+            if row is None:
+                continue
+            idx = self._model.index(row)
+            pm = self._model.data(idx, Qt.ItemDataRole.DecorationRole)
+            if isinstance(pm, QPixmap) and not pm.isNull():
+                pm = pm.scaledToHeight(
+                    self.THUMB_H, Qt.TransformationMode.SmoothTransformation)
+            thumb = _StripThumb(wid, pm)
+            wp = self._model.data(idx, WALLPAPER_ROLE)
+            thumb.setToolTip(
+                (f"{wp.title}\n" if wp else "") + "Cliquer pour retirer")
+            thumb.clicked.connect(self._remove)
+            self._row.insertWidget(self._row.count() - 1, thumb)
+
+    def _remove(self, wid: str) -> None:
+        if self._model is not None:
+            self._model.set_checked(
+                [i for i in self._model.checked_ids() if i != wid])
+
+
+# --------------------------------------------------------------------------- #
 # Main window
 # --------------------------------------------------------------------------- #
 class MainWindow(QMainWindow):
@@ -807,85 +902,94 @@ class MainWindow(QMainWindow):
     # UI construction ------------------------------------------------------ #
     def _build_ui(self) -> None:
         central = QWidget()
-        outer = QHBoxLayout(central)
+        root = QVBoxLayout(central)
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.setChildrenCollapsible(False)
-        splitter.addWidget(self._build_playlist_panel())
         main = QWidget()
         main.setLayout(self._build_main_area())
         splitter.addWidget(main)
         splitter.addWidget(self._build_properties_panel())
-        splitter.setStretchFactor(0, 0)
-        splitter.setStretchFactor(1, 1)  # the grid takes the slack
-        splitter.setStretchFactor(2, 0)
-        splitter.setSizes([280, 900, 320])
-        outer.addWidget(splitter)
+        splitter.setStretchFactor(0, 1)  # the grid takes the slack
+        splitter.setStretchFactor(1, 0)
+        splitter.setSizes([900, 320])
+        root.addWidget(splitter, 1)
+        root.addWidget(self._build_playlist_bar())
         self.setCentralWidget(central)
         self.status = self.statusBar()
 
-    def _build_playlist_panel(self) -> QWidget:
-        panel = QFrame()
-        panel.setObjectName("playlistPanel")
-        panel.setFrameShape(QFrame.Shape.StyledPanel)
-        panel.setMinimumWidth(220)
-        v = QVBoxLayout(panel)
-        v.addWidget(QLabel("<b>Playlists</b>"))
+    def _build_playlist_bar(self) -> QWidget:
+        """WPE-style bottom bar: playlist controls on top, a horizontal strip of
+        the currently checked wallpapers (the working playlist) below."""
+        bar = QFrame()
+        bar.setObjectName("playlistBar")
+        v = QVBoxLayout(bar)
+        v.setContentsMargins(8, 6, 8, 6)
 
-        self.pl_list = QListWidget()
-        self.pl_list.setToolTip(
-            "Clic : sélectionner (réglages).\n"
-            "Double-clic : cocher ses fonds dans la grille pour l'éditer."
-        )
-        self.pl_list.currentTextChanged.connect(self._on_playlist_selected)
-        self.pl_list.itemDoubleClicked.connect(self._on_playlist_double_clicked)
-        v.addWidget(self.pl_list, 1)
+        controls = FlowLayout()
+        self.pl_head = QLabel("Sélection (0)")
+        self.pl_head.setObjectName("plHead")
+        controls.addWidget(self.pl_head)
 
-        self.new_pl_btn = QPushButton("Nouvelle (depuis cochés)")
+        controls.addWidget(QLabel("Playlist :"))
+        self.pl_combo = QComboBox()
+        self.pl_combo.setMinimumWidth(160)
+        self.pl_combo.currentTextChanged.connect(self._on_playlist_selected)
+        controls.addWidget(self.pl_combo)
+        self.pl_count = QLabel("—")
+        self.pl_count.setObjectName("plCount")
+        controls.addWidget(self.pl_count)
+
+        self.load_pl_btn = QPushButton("Charger")
+        self.load_pl_btn.setToolTip(
+            "Coche dans la grille les fonds de la playlist sélectionnée "
+            "(pour l'éditer via « MàJ items » ou la forker via « Nouvelle »).")
+        self.load_pl_btn.clicked.connect(self._load_playlist_into_checks)
+        controls.addWidget(self.load_pl_btn)
+
+        self.new_pl_btn = QPushButton("Nouvelle")
         self.new_pl_btn.setProperty("accent", True)
+        self.new_pl_btn.setToolTip("Créer une playlist depuis les fonds cochés.")
         self.new_pl_btn.clicked.connect(self._create_playlist)
-        v.addWidget(self.new_pl_btn)
+        controls.addWidget(self.new_pl_btn)
 
-        self.update_pl_btn = QPushButton("MàJ items (depuis cochés)")
+        self.update_pl_btn = QPushButton("MàJ items")
+        self.update_pl_btn.setToolTip(
+            "Remplacer les fonds de la playlist sélectionnée par les cochés.")
         self.update_pl_btn.clicked.connect(self._update_playlist_items)
-        v.addWidget(self.update_pl_btn)
-
-        self.uncheck_btn = QPushButton("Tout décocher")
-        self.uncheck_btn.setToolTip("Décoche tous les fonds de la grille.")
-        self.uncheck_btn.setEnabled(False)
-        self.uncheck_btn.clicked.connect(lambda: self.model.clear_checks())
-        v.addWidget(self.uncheck_btn)
+        controls.addWidget(self.update_pl_btn)
 
         self.del_pl_btn = QPushButton("Supprimer")
         self.del_pl_btn.setProperty("danger", True)
         self.del_pl_btn.clicked.connect(self._delete_playlist)
-        v.addWidget(self.del_pl_btn)
+        controls.addWidget(self.del_pl_btn)
 
-        self.import_btn = QPushButton("Importer depuis Wallpaper Engine")
-        self.import_btn.clicked.connect(self._import_wpe)
-        v.addWidget(self.import_btn)
-
-        v.addWidget(self._hline())
-        v.addWidget(QLabel("Réglages de la playlist :"))
-        row = QHBoxLayout()
-        row.addWidget(QLabel("Intervalle (min) :"))
+        controls.addWidget(QLabel("Intervalle (min) :"))
         self.interval_spin = QSpinBox()
         self.interval_spin.setRange(1, 1440)
         self.interval_spin.setValue(30)
         self.interval_spin.valueChanged.connect(self._on_pl_settings_changed)
-        row.addWidget(self.interval_spin)
-        v.addLayout(row)
+        controls.addWidget(self.interval_spin)
 
-        row2 = QHBoxLayout()
-        row2.addWidget(QLabel("Ordre :"))
+        controls.addWidget(QLabel("Ordre :"))
         self.order_combo = QComboBox()
         self.order_combo.addItems(["Séquentiel", "Aléatoire"])
         self.order_combo.currentIndexChanged.connect(self._on_pl_settings_changed)
-        row2.addWidget(self.order_combo)
-        v.addLayout(row2)
+        controls.addWidget(self.order_combo)
 
-        self.pl_count = QLabel("—")
-        v.addWidget(self.pl_count)
-        return panel
+        self.import_btn = QPushButton("Importer WPE")
+        self.import_btn.setToolTip("Importer les playlists depuis Wallpaper Engine.")
+        self.import_btn.clicked.connect(self._import_wpe)
+        controls.addWidget(self.import_btn)
+
+        self.uncheck_btn = QPushButton("Tout décocher")
+        self.uncheck_btn.setEnabled(False)
+        self.uncheck_btn.clicked.connect(lambda: self.model.clear_checks())
+        controls.addWidget(self.uncheck_btn)
+        v.addLayout(controls)
+
+        self.checks_strip = ChecksStrip()
+        v.addWidget(self.checks_strip)
+        return bar
 
     # -- right-side properties panel (WPE-style) --------------------------- #
     def _build_properties_panel(self) -> QWidget:
@@ -1197,6 +1301,7 @@ class MainWindow(QMainWindow):
         self.proxy.rowsRemoved.connect(self._update_count)
         self.proxy.modelReset.connect(self._update_count)
         self.model.checked_changed.connect(self._on_checked_changed)
+        self.checks_strip.set_model(self.model)
         self.view.selectionModel().selectionChanged.connect(
             lambda *_: self._on_selection_changed()
         )
@@ -1210,6 +1315,7 @@ class MainWindow(QMainWindow):
 
     def _on_checked_changed(self) -> None:
         n = len(self.model.checked_ids())
+        self.pl_head.setText(f"Sélection ({n})")
         self.uncheck_btn.setText(f"Tout décocher ({n})" if n else "Tout décocher")
         self.uncheck_btn.setEnabled(n > 0)
 
@@ -1381,21 +1487,19 @@ class MainWindow(QMainWindow):
     # Playlists panel ------------------------------------------------------- #
     def _refresh_playlists(self) -> None:
         names = self.controller.playlist_names()
-        current = self.pl_list.currentItem().text() if self.pl_list.currentItem() else None
-        self.pl_list.blockSignals(True)
-        self.pl_list.clear()
-        self.pl_list.addItems(names)
-        self.pl_list.blockSignals(False)
+        current = self.pl_combo.currentText() if self.pl_combo.count() else None
+        self.pl_combo.blockSignals(True)
+        self.pl_combo.clear()
+        self.pl_combo.addItems(names)
+        if current and current in names:
+            self.pl_combo.setCurrentText(current)
+        self.pl_combo.blockSignals(False)
         self.apply_pl_combo.clear()
         self.apply_pl_combo.addItems(names)
-        if current and current in names:
-            items = self.pl_list.findItems(current, Qt.MatchFlag.MatchExactly)
-            if items:
-                self.pl_list.setCurrentItem(items[0])
+        self._on_playlist_selected(self.pl_combo.currentText())
 
     def _selected_playlist_name(self) -> str | None:
-        item = self.pl_list.currentItem()
-        return item.text() if item else None
+        return self.pl_combo.currentText() or None
 
     def _on_playlist_selected(self, name: str) -> None:
         pl = self.controller.playlists.get(name)
@@ -1408,16 +1512,18 @@ class MainWindow(QMainWindow):
         self._loading_pl = False
         self.pl_count.setText(f"{len(pl.get('ids', []))} fonds")
 
-    def _on_playlist_double_clicked(self, item) -> None:
-        """Load a playlist's wallpapers into the grid checkboxes, so it can be
-        edited (overwrite via « MàJ items ») or forked (« Nouvelle »)."""
-        pl = self.controller.playlists.get(item.text())
+    def _load_playlist_into_checks(self) -> None:
+        """Load the selected playlist's wallpapers into the grid checkboxes, so
+        it can be edited (« MàJ items ») or forked (« Nouvelle »)."""
+        name = self._selected_playlist_name()
+        pl = self.controller.playlists.get(name) if name else None
         if not pl:
+            self.status.showMessage("Sélectionne d'abord une playlist.", 4000)
             return
         ids = pl.get("ids", [])
         self.model.set_checked(ids)
         self.status.showMessage(
-            f"{len(ids)} fonds de « {item.text()} » cochés — édite puis « MàJ items » "
+            f"{len(ids)} fonds de « {name} » cochés — édite puis « MàJ items » "
             "ou « Nouvelle ».", 6000
         )
 
