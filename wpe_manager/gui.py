@@ -41,6 +41,8 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QColorDialog,
     QComboBox,
+    QDialog,
+    QDialogButtonBox,
     QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
@@ -1027,6 +1029,7 @@ class MainWindow(QMainWindow):
 
     # UI construction ------------------------------------------------------ #
     def _build_ui(self) -> None:
+        self._build_settings_dialog()
         central = QWidget()
         root = QVBoxLayout(central)
         splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -1335,6 +1338,64 @@ class MainWindow(QMainWindow):
         parent_layout.addLayout(box)
         return box
 
+    # -- settings dialog (declutters the top bar) -------------------------- #
+    def _build_settings_dialog(self) -> None:
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Réglages")
+        dlg.setModal(False)
+        form = QFormLayout(dlg)
+
+        self.silent_combo = QComboBox()
+        self.silent_combo.addItems(["🔊 Son", "🔇 Muet"])
+        self.silent_combo.setCurrentIndex(1 if self.cfg.silent else 0)
+        self.silent_combo.currentIndexChanged.connect(self._on_silent_changed)
+        form.addRow("Audio :", self.silent_combo)
+
+        self.fps_spin = QSpinBox()
+        self.fps_spin.setRange(5, 240)
+        self.fps_spin.setValue(self.cfg.fps)
+        self.fps_spin.valueChanged.connect(self._on_fps_changed)
+        form.addRow("FPS :", self.fps_spin)
+
+        self.overlap_spin = QSpinBox()
+        self.overlap_spin.setRange(0, 5000)
+        self.overlap_spin.setSingleStep(100)
+        self.overlap_spin.setValue(self.cfg.overlap_ms)
+        self.overlap_spin.setToolTip(
+            "Recouvrement entre l'ancien et le nouveau fond (0 = coupure nette).")
+        self.overlap_spin.valueChanged.connect(self._on_overlap_changed)
+        form.addRow("Transition (ms) :", self.overlap_spin)
+
+        self.autostart_check = QCheckBox("Démarrer avec la session")
+        self.autostart_check.setToolTip(
+            "Relance l'app dans la barre système et restaure les fonds "
+            "d'écran (rotation comprise) à l'ouverture de session.")
+        self.autostart_check.setChecked(config.is_autostart_enabled())
+        self.autostart_check.toggled.connect(self._set_autostart)
+        form.addRow(self.autostart_check)
+
+        self.launcher_check = QCheckBox("Menu applications")
+        self.launcher_check.setToolTip(
+            "Ajoute une entrée dans le menu des applications pour lancer "
+            "l'app comme n'importe quel programme.")
+        self.launcher_check.setChecked(config.is_launcher_installed())
+        self.launcher_check.toggled.connect(self._set_launcher)
+        form.addRow(self.launcher_check)
+
+        paths_btn = QPushButton("Chemins de la bibliothèque…")
+        paths_btn.clicked.connect(self._edit_paths)
+        form.addRow(paths_btn)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        buttons.rejected.connect(dlg.hide)
+        form.addRow(buttons)
+        self._settings_dialog = dlg
+
+    def _open_settings(self) -> None:
+        self._settings_dialog.show()
+        self._settings_dialog.raise_()
+        self._settings_dialog.activateWindow()
+
     def _build_main_area(self) -> QVBoxLayout:
         area = QVBoxLayout()
 
@@ -1360,25 +1421,13 @@ class MainWindow(QMainWindow):
         self.clear_btn = QPushButton("Vider l'écran")
         self.clear_btn.clicked.connect(self._clear_selected)
         bar.addWidget(self.clear_btn)
-        self.autostart_check = QCheckBox("Démarrer avec la session")
-        self.autostart_check.setToolTip(
-            "Relance l'app dans la barre système et restaure les fonds "
-            "d'écran (rotation comprise) à l'ouverture de session."
-        )
-        self.autostart_check.setChecked(config.is_autostart_enabled())
-        self.autostart_check.toggled.connect(self._set_autostart)
-        bar.addWidget(self.autostart_check)
-        self.launcher_check = QCheckBox("Menu applications")
-        self.launcher_check.setToolTip(
-            "Ajoute une entrée dans le menu des applications pour lancer "
-            "l'app comme n'importe quel programme."
-        )
-        self.launcher_check.setChecked(config.is_launcher_installed())
-        self.launcher_check.toggled.connect(self._set_launcher)
-        bar.addWidget(self.launcher_check)
         self.stop_btn = QPushButton("Tout arrêter")
         self.stop_btn.clicked.connect(self.controller.stop_all)
         bar.addWidget(self.stop_btn)
+        self.settings_btn = QPushButton("⚙ Réglages")
+        self.settings_btn.setToolTip("Audio, FPS, transition, autostart, chemins…")
+        self.settings_btn.clicked.connect(self._open_settings)
+        bar.addWidget(self.settings_btn)
         area.addLayout(bar)
 
         bar2 = FlowLayout()
@@ -1387,28 +1436,6 @@ class MainWindow(QMainWindow):
         self.search.setMinimumWidth(220)
         self.search.textChanged.connect(self._on_search)
         bar2.addWidget(self.search)
-        self.silent_combo = QComboBox()
-        self.silent_combo.addItems(["🔊 Son", "🔇 Muet"])
-        self.silent_combo.setCurrentIndex(1 if self.cfg.silent else 0)
-        self.silent_combo.currentIndexChanged.connect(self._on_silent_changed)
-        bar2.addWidget(self.silent_combo)
-        bar2.addWidget(QLabel("FPS :"))
-        self.fps_spin = QSpinBox()
-        self.fps_spin.setRange(5, 240)
-        self.fps_spin.setValue(self.cfg.fps)
-        self.fps_spin.valueChanged.connect(self._on_fps_changed)
-        bar2.addWidget(self.fps_spin)
-        bar2.addWidget(QLabel("Transition (ms) :"))
-        self.overlap_spin = QSpinBox()
-        self.overlap_spin.setRange(0, 5000)
-        self.overlap_spin.setSingleStep(100)
-        self.overlap_spin.setValue(self.cfg.overlap_ms)
-        self.overlap_spin.setToolTip("Recouvrement entre l'ancien et le nouveau fond (0 = coupure nette).")
-        self.overlap_spin.valueChanged.connect(self._on_overlap_changed)
-        bar2.addWidget(self.overlap_spin)
-        self.paths_btn = QPushButton("Chemins…")
-        self.paths_btn.clicked.connect(self._edit_paths)
-        bar2.addWidget(self.paths_btn)
         bar2.addWidget(QLabel("Tri :"))
         self.sort_combo = QComboBox()
         self.sort_combo.addItem("Titre A→Z", "title")
