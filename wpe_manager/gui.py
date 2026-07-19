@@ -40,8 +40,6 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QColorDialog,
     QComboBox,
-    QDialog,
-    QDialogButtonBox,
     QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
@@ -72,6 +70,8 @@ from .rotation import RotationController
 THUMB = QSize(240, 135)  # 16:9 thumbnails
 WALLPAPER_ROLE = Qt.ItemDataRole.UserRole + 1
 RESOLUTION_ROLE = Qt.ItemDataRole.UserRole + 2  # compact "W×H" for the card badge
+_TYPE_LABELS = {"scene": "Scène", "video": "Vidéo", "web": "Web",
+                "application": "Application"}
 
 
 def app_icon() -> QIcon:
@@ -503,48 +503,24 @@ class _MetaSyncTask(QRunnable):
 # --------------------------------------------------------------------------- #
 # Per-wallpaper properties editor
 # --------------------------------------------------------------------------- #
-class PropertiesDialog(QDialog):
-    """Edit a wallpaper's customisable properties. Builds a widget per property
-    type; on accept exposes only the values that differ from the defaults, so
+class PropertyForm(QWidget):
+    """A reusable form of a wallpaper's editable properties. Builds a widget per
+    property type and exposes only the values that differ from the defaults, so
     the launch command carries the minimum set of --set-property overrides."""
 
-    def __init__(self, parent, wp: Wallpaper, props: list[library.Property],
-                 overrides: dict):
-        super().__init__(parent)
-        self.setWindowTitle(f"Propriétés — {wp.title}")
-        self.resize(480, 620)
-        self.reset_requested = False
+    def __init__(self, props: list[library.Property], overrides: dict,
+                 color_parent=None):
+        super().__init__()
         self._getters: dict[str, tuple[library.Property, object]] = {}
-
-        outer = QVBoxLayout(self)
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        content = QWidget()
-        form = QFormLayout(content)
+        self._color_parent = color_parent or self
+        form = QFormLayout(self)
+        form.setContentsMargins(0, 0, 0, 0)
         form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
         for p in props:
             current = overrides.get(p.key, p.default)
             widget, getter = self._make_widget(p, current)
             self._getters[p.key] = (p, getter)
             form.addRow(p.label + " :", widget)
-        scroll.setWidget(content)
-        outer.addWidget(scroll, 1)
-
-        buttons = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Ok
-            | QDialogButtonBox.StandardButton.Cancel
-            | QDialogButtonBox.StandardButton.Reset
-        )
-        buttons.accepted.connect(self.accept)
-        buttons.rejected.connect(self.reject)
-        buttons.button(QDialogButtonBox.StandardButton.Reset).clicked.connect(
-            self._on_reset
-        )
-        outer.addWidget(buttons)
-
-    def _on_reset(self) -> None:
-        self.reset_requested = True
-        self.accept()
 
     # -- widget factory ---------------------------------------------------- #
     def _make_widget(self, p: library.Property, current):
@@ -593,7 +569,8 @@ class PropertiesDialog(QDialog):
 
         def pick():
             r, g, b = state["rgb"]
-            chosen = QColorDialog.getColor(QColor.fromRgbF(r, g, b), self, "Couleur")
+            chosen = QColorDialog.getColor(
+                QColor.fromRgbF(r, g, b), self._color_parent, "Couleur")
             if chosen.isValid():
                 state["rgb"] = (chosen.redF(), chosen.greenF(), chosen.blueF())
                 refresh()
@@ -759,6 +736,7 @@ class MainWindow(QMainWindow):
         outer = QHBoxLayout(central)
         outer.addWidget(self._build_playlist_panel())
         outer.addLayout(self._build_main_area(), 1)
+        outer.addWidget(self._build_properties_panel())
         self.setCentralWidget(central)
         self.status = self.statusBar()
 
@@ -826,6 +804,135 @@ class MainWindow(QMainWindow):
         v.addWidget(self.pl_count)
         return panel
 
+    # -- right-side properties panel (WPE-style) --------------------------- #
+    _PP_PREVIEW_W = 280
+
+    def _build_properties_panel(self) -> QWidget:
+        panel = QFrame()
+        panel.setObjectName("propsPanel")
+        panel.setFixedWidth(300)
+        v = QVBoxLayout(panel)
+
+        self.pp_preview = QLabel("Aucun fond sélectionné")
+        self.pp_preview.setObjectName("ppPreview")
+        self.pp_preview.setFixedHeight(168)
+        self.pp_preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        v.addWidget(self.pp_preview)
+
+        self.pp_title = QLabel("—")
+        self.pp_title.setObjectName("ppTitle")
+        self.pp_title.setWordWrap(True)
+        self.pp_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        v.addWidget(self.pp_title)
+
+        self.pp_meta = QLabel("")
+        self.pp_meta.setObjectName("ppMeta")
+        self.pp_meta.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        v.addWidget(self.pp_meta)
+
+        v.addWidget(self._hline())
+        hdr = QLabel("Propriétés")
+        hdr.setObjectName("ppSection")
+        v.addWidget(hdr)
+
+        self.pp_scroll = QScrollArea()
+        self.pp_scroll.setWidgetResizable(True)
+        self.pp_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        v.addWidget(self.pp_scroll, 1)
+
+        row = QHBoxLayout()
+        self.pp_reset = QPushButton("Réinitialiser")
+        self.pp_reset.clicked.connect(self._reset_props)
+        row.addWidget(self.pp_reset)
+        self.pp_apply = QPushButton("Appliquer")
+        self.pp_apply.setProperty("accent", True)
+        self.pp_apply.clicked.connect(self._apply_props)
+        row.addWidget(self.pp_apply)
+        v.addLayout(row)
+
+        self._pp_wp: Wallpaper | None = None
+        self._pp_form: PropertyForm | None = None
+        self._update_props_panel(None)
+        return panel
+
+    def _set_props_placeholder(self, text: str) -> None:
+        lbl = QLabel(text)
+        lbl.setObjectName("ppPlaceholder")
+        lbl.setWordWrap(True)
+        lbl.setAlignment(Qt.AlignmentFlag.AlignTop)
+        self.pp_scroll.setWidget(lbl)
+
+    def _update_props_panel(self, wp: Wallpaper | None) -> None:
+        self._pp_wp = wp
+        self._pp_form = None
+        if wp is None:
+            self.pp_preview.setPixmap(QPixmap())
+            self.pp_preview.setText("Aucun fond sélectionné")
+            self.pp_title.setText("—")
+            self.pp_meta.setText("")
+            self._set_props_placeholder(
+                "Sélectionne un fond pour voir et éditer ses propriétés.")
+            self.pp_apply.setEnabled(False)
+            self.pp_reset.setEnabled(False)
+            return
+
+        pm = QPixmap(str(wp.preview)) if wp.has_preview else QPixmap()
+        if not pm.isNull():
+            self.pp_preview.setPixmap(pm.scaled(
+                self._PP_PREVIEW_W, self.pp_preview.height(),
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation))
+            self.pp_preview.setText("")
+        else:
+            self.pp_preview.setPixmap(QPixmap())
+            self.pp_preview.setText("(pas d'aperçu)")
+        self.pp_title.setText(wp.title)
+        type_label = _TYPE_LABELS.get(wp.type, wp.type.capitalize() if wp.type else "")
+        age_label = AGE_LABELS.get(wp.age, "")
+        self.pp_meta.setText("  ·  ".join(x for x in (type_label, age_label) if x))
+
+        props = library.read_properties(wp.folder)
+        if not props:
+            self._set_props_placeholder(
+                "Ce fond n'expose aucune propriété personnalisable.")
+            self.pp_apply.setEnabled(False)
+            self.pp_reset.setEnabled(False)
+            return
+        overrides = config.load_properties().get(wp.id, {})
+        self._pp_form = PropertyForm(props, overrides, color_parent=self)
+        self.pp_scroll.setWidget(self._pp_form)
+        self.pp_apply.setEnabled(True)
+        self.pp_reset.setEnabled(bool(overrides))
+
+    def _apply_props(self) -> None:
+        wp = self._pp_wp
+        if wp is None or self._pp_form is None:
+            return
+        new = self._pp_form.changed_values()
+        all_overrides = config.load_properties()
+        if new:
+            all_overrides[wp.id] = new
+        else:
+            all_overrides.pop(wp.id, None)
+        config.save_properties(all_overrides)
+        self.controller.refresh_wallpaper(wp.id)  # live if currently displayed
+        self.pp_reset.setEnabled(bool(new))
+        self.status.showMessage(
+            f"{len(new)} propriété(s) appliquée(s) à « {wp.title} »." if new
+            else f"Propriétés de « {wp.title} » remises par défaut.", 5000)
+
+    def _reset_props(self) -> None:
+        wp = self._pp_wp
+        if wp is None:
+            return
+        all_overrides = config.load_properties()
+        if wp.id in all_overrides:
+            all_overrides.pop(wp.id, None)
+            config.save_properties(all_overrides)
+            self.controller.refresh_wallpaper(wp.id)
+        self._update_props_panel(wp)  # rebuild the form at defaults
+        self.status.showMessage(f"Propriétés de « {wp.title} » réinitialisées.", 5000)
+
     def _build_main_area(self) -> QVBoxLayout:
         area = QVBoxLayout()
 
@@ -840,14 +947,6 @@ class MainWindow(QMainWindow):
         self.apply_single_btn.setProperty("accent", True)
         self.apply_single_btn.clicked.connect(self._apply_single)
         bar.addWidget(self.apply_single_btn)
-
-        self.props_btn = QPushButton("Propriétés…")
-        self.props_btn.setToolTip(
-            "Personnaliser le fond sélectionné (couleurs, curseurs, options)."
-        )
-        self.props_btn.setEnabled(False)
-        self.props_btn.clicked.connect(self._edit_properties)
-        bar.addWidget(self.props_btn)
 
         self.apply_pl_combo = QComboBox()
         bar.addWidget(self.apply_pl_combo)
@@ -1012,7 +1111,7 @@ class MainWindow(QMainWindow):
         self._on_selection_changed()
 
     def _on_selection_changed(self) -> None:
-        self.props_btn.setEnabled(self._selected_wallpaper() is not None)
+        self._update_props_panel(self._selected_wallpaper())
 
     def _on_checked_changed(self) -> None:
         n = len(self.model.checked_ids())
@@ -1325,35 +1424,6 @@ class MainWindow(QMainWindow):
             return
         self.controller.assign_single(screen, wp.id)
         self.status.showMessage(f"« {wp.title} » → {screen}", 5000)
-
-    def _edit_properties(self) -> None:
-        wp = self._selected_wallpaper()
-        if wp is None:
-            return
-        props = library.read_properties(wp.folder)
-        if not props:
-            QMessageBox.information(
-                self, "Propriétés",
-                "Ce fond n'expose aucune propriété personnalisable.",
-            )
-            return
-        all_overrides = config.load_properties()
-        dlg = PropertiesDialog(self, wp, props, all_overrides.get(wp.id, {}))
-        if dlg.exec() != QDialog.DialogCode.Accepted:
-            return
-        new = {} if dlg.reset_requested else dlg.changed_values()
-        if new:
-            all_overrides[wp.id] = new
-        else:
-            all_overrides.pop(wp.id, None)
-        config.save_properties(all_overrides)
-        self.controller.refresh_wallpaper(wp.id)  # live if currently displayed
-        if dlg.reset_requested:
-            self.status.showMessage(f"Propriétés de « {wp.title} » réinitialisées.", 5000)
-        else:
-            self.status.showMessage(
-                f"{len(new)} propriété(s) personnalisée(s) pour « {wp.title} ».", 5000
-            )
 
     def _apply_playlist(self) -> None:
         screen = self._current_screen()

@@ -101,6 +101,19 @@ QListView#grid {{
     background: {GRID_BG}; border: 1px solid #2a2d33; border-radius: 8px;
 }}
 
+/* --- right-side properties panel --- */
+QFrame#propsPanel {{
+    background: {PANEL}; border: 1px solid #33373e; border-radius: 10px;
+}}
+QLabel#ppPreview {{
+    background: {GRID_BG}; border: 1px solid {BORDER};
+    border-radius: 6px; color: {MUTED};
+}}
+QLabel#ppTitle {{ font-size: 15px; font-weight: 600; padding: 2px 0; }}
+QLabel#ppMeta {{ color: {MUTED}; }}
+QLabel#ppSection {{ color: {MUTED}; font-weight: 600; padding-top: 2px; }}
+QLabel#ppPlaceholder {{ color: {MUTED}; padding: 8px 2px; }}
+
 /* --- menus --- */
 QMenu {{ background: {PANEL}; color: {TEXT}; border: 1px solid {BORDER}; padding: 4px; }}
 QMenu::item {{ padding: 5px 22px 5px 12px; border-radius: 4px; }}
