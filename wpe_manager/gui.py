@@ -10,6 +10,7 @@ from PySide6.QtCore import (
     QEvent,
     QModelIndex,
     QObject,
+    QPoint,
     QPointF,
     QRect,
     QRectF,
@@ -47,6 +48,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QInputDialog,
     QLabel,
+    QLayout,
     QLineEdit,
     QListView,
     QListWidget,
@@ -73,6 +75,74 @@ WALLPAPER_ROLE = Qt.ItemDataRole.UserRole + 1
 RESOLUTION_ROLE = Qt.ItemDataRole.UserRole + 2  # compact "W×H" for the card badge
 _TYPE_LABELS = {"scene": "Scène", "video": "Vidéo", "web": "Web",
                 "application": "Application"}
+
+
+class FlowLayout(QLayout):
+    """A layout that lays widgets out left-to-right and wraps to a new line when
+    it runs out of width. Used for the toolbars so the central area can shrink
+    (a single QHBoxLayout row would pin a huge minimum width and block the
+    splitter from resizing the side panels)."""
+
+    def __init__(self, parent=None, margin=0, hspacing=6, vspacing=6):
+        super().__init__(parent)
+        self._items: list = []
+        self._hspace = hspacing
+        self._vspace = vspacing
+        self.setContentsMargins(margin, margin, margin, margin)
+
+    def addItem(self, item) -> None:
+        self._items.append(item)
+
+    def count(self) -> int:
+        return len(self._items)
+
+    def itemAt(self, i):
+        return self._items[i] if 0 <= i < len(self._items) else None
+
+    def takeAt(self, i):
+        return self._items.pop(i) if 0 <= i < len(self._items) else None
+
+    def expandingDirections(self):
+        return Qt.Orientation(0)
+
+    def hasHeightForWidth(self) -> bool:
+        return True
+
+    def heightForWidth(self, width: int) -> int:
+        return self._do_layout(QRect(0, 0, width, 0), test_only=True)
+
+    def setGeometry(self, rect) -> None:
+        super().setGeometry(rect)
+        self._do_layout(rect, test_only=False)
+
+    def sizeHint(self) -> QSize:
+        return self.minimumSize()
+
+    def minimumSize(self) -> QSize:
+        size = QSize()
+        for it in self._items:
+            size = size.expandedTo(it.minimumSize())
+        m = self.contentsMargins()
+        return size + QSize(m.left() + m.right(), m.top() + m.bottom())
+
+    def _do_layout(self, rect, test_only: bool) -> int:
+        m = self.contentsMargins()
+        x = rect.x() + m.left()
+        y = rect.y() + m.top()
+        right = rect.right() - m.right()
+        line_h = 0
+        for it in self._items:
+            hint = it.sizeHint()
+            w, h = hint.width(), hint.height()
+            if x + w - 1 > right and line_h > 0:
+                x = rect.x() + m.left()
+                y += line_h + self._vspace
+                line_h = 0
+            if not test_only:
+                it.setGeometry(QRect(QPoint(x, y), hint))
+            x += w + self._hspace
+            line_h = max(line_h, h)
+        return y + line_h + m.bottom() - rect.y()
 
 
 def app_icon() -> QIcon:
@@ -962,7 +1032,7 @@ class MainWindow(QMainWindow):
     def _build_main_area(self) -> QVBoxLayout:
         area = QVBoxLayout()
 
-        bar = QHBoxLayout()
+        bar = FlowLayout()
         bar.addWidget(QLabel("Écran :"))
         self.screen_combo = QComboBox()
         self._populate_screens()
@@ -984,7 +1054,6 @@ class MainWindow(QMainWindow):
         self.clear_btn = QPushButton("Vider l'écran")
         self.clear_btn.clicked.connect(self._clear_selected)
         bar.addWidget(self.clear_btn)
-        bar.addStretch(1)
         self.autostart_check = QCheckBox("Démarrer avec la session")
         self.autostart_check.setToolTip(
             "Relance l'app dans la barre système et restaure les fonds "
@@ -1006,11 +1075,12 @@ class MainWindow(QMainWindow):
         bar.addWidget(self.stop_btn)
         area.addLayout(bar)
 
-        bar2 = QHBoxLayout()
+        bar2 = FlowLayout()
         self.search = QLineEdit()
         self.search.setPlaceholderText("Rechercher…")
+        self.search.setMinimumWidth(220)
         self.search.textChanged.connect(self._on_search)
-        bar2.addWidget(self.search, 1)
+        bar2.addWidget(self.search)
         self.silent_combo = QComboBox()
         self.silent_combo.addItems(["🔊 Son", "🔇 Muet"])
         self.silent_combo.setCurrentIndex(1 if self.cfg.silent else 0)
@@ -1035,7 +1105,7 @@ class MainWindow(QMainWindow):
         bar2.addWidget(self.paths_btn)
         area.addLayout(bar2)
 
-        bar3 = QHBoxLayout()
+        bar3 = FlowLayout()
         bar3.addWidget(QLabel("Filtres :"))
         self.genre_btn = QPushButton("Genre")
         self.type_btn = QPushButton("Type")
@@ -1054,7 +1124,6 @@ class MainWindow(QMainWindow):
         self.reset_filters_btn = QPushButton("Réinitialiser")
         self.reset_filters_btn.clicked.connect(self._reset_filters)
         bar3.addWidget(self.reset_filters_btn)
-        bar3.addStretch(1)
         bar3.addWidget(QLabel("Tri :"))
         self.sort_combo = QComboBox()
         self.sort_combo.addItem("Titre A→Z", "title")
