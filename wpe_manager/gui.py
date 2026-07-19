@@ -56,6 +56,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSpinBox,
+    QSplitter,
     QStyle,
     QStyledItemDelegate,
     QSystemTrayIcon,
@@ -516,6 +517,9 @@ class PropertyForm(QWidget):
         form = QFormLayout(self)
         form.setContentsMargins(0, 0, 0, 0)
         form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
+        # long labels (e.g. "Browse properties scheme color") otherwise squeeze
+        # the value; wrap the field onto its own full-width row when needed.
+        form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
         for p in props:
             current = overrides.get(p.key, p.default)
             widget, getter = self._make_widget(p, current)
@@ -734,9 +738,18 @@ class MainWindow(QMainWindow):
     def _build_ui(self) -> None:
         central = QWidget()
         outer = QHBoxLayout(central)
-        outer.addWidget(self._build_playlist_panel())
-        outer.addLayout(self._build_main_area(), 1)
-        outer.addWidget(self._build_properties_panel())
+        splitter = QSplitter(Qt.Orientation.Horizontal)
+        splitter.setChildrenCollapsible(False)
+        splitter.addWidget(self._build_playlist_panel())
+        main = QWidget()
+        main.setLayout(self._build_main_area())
+        splitter.addWidget(main)
+        splitter.addWidget(self._build_properties_panel())
+        splitter.setStretchFactor(0, 0)
+        splitter.setStretchFactor(1, 1)  # the grid takes the slack
+        splitter.setStretchFactor(2, 0)
+        splitter.setSizes([280, 900, 320])
+        outer.addWidget(splitter)
         self.setCentralWidget(central)
         self.status = self.statusBar()
 
@@ -744,7 +757,7 @@ class MainWindow(QMainWindow):
         panel = QFrame()
         panel.setObjectName("playlistPanel")
         panel.setFrameShape(QFrame.Shape.StyledPanel)
-        panel.setFixedWidth(280)
+        panel.setMinimumWidth(220)
         v = QVBoxLayout(panel)
         v.addWidget(QLabel("<b>Playlists</b>"))
 
@@ -805,18 +818,18 @@ class MainWindow(QMainWindow):
         return panel
 
     # -- right-side properties panel (WPE-style) --------------------------- #
-    _PP_PREVIEW_W = 280
-
     def _build_properties_panel(self) -> QWidget:
         panel = QFrame()
         panel.setObjectName("propsPanel")
-        panel.setFixedWidth(300)
+        panel.setMinimumWidth(250)
         v = QVBoxLayout(panel)
 
         self.pp_preview = QLabel("Aucun fond sélectionné")
         self.pp_preview.setObjectName("ppPreview")
         self.pp_preview.setFixedHeight(168)
         self.pp_preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.pp_preview.installEventFilter(self)  # rescale preview on panel resize
+        self._pp_preview_pm = QPixmap()
         v.addWidget(self.pp_preview)
 
         self.pp_title = QLabel("—")
@@ -862,10 +875,26 @@ class MainWindow(QMainWindow):
         lbl.setAlignment(Qt.AlignmentFlag.AlignTop)
         self.pp_scroll.setWidget(lbl)
 
+    def _rescale_preview(self) -> None:
+        pm = getattr(self, "_pp_preview_pm", QPixmap())
+        if pm is None or pm.isNull():
+            return
+        w = max(80, self.pp_preview.width() - 2)
+        self.pp_preview.setPixmap(pm.scaled(
+            w, self.pp_preview.height(),
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation))
+
+    def eventFilter(self, obj, event):
+        if obj is self.pp_preview and event.type() == QEvent.Type.Resize:
+            self._rescale_preview()
+        return super().eventFilter(obj, event)
+
     def _update_props_panel(self, wp: Wallpaper | None) -> None:
         self._pp_wp = wp
         self._pp_form = None
         if wp is None:
+            self._pp_preview_pm = QPixmap()
             self.pp_preview.setPixmap(QPixmap())
             self.pp_preview.setText("Aucun fond sélectionné")
             self.pp_title.setText("—")
@@ -876,13 +905,10 @@ class MainWindow(QMainWindow):
             self.pp_reset.setEnabled(False)
             return
 
-        pm = QPixmap(str(wp.preview)) if wp.has_preview else QPixmap()
-        if not pm.isNull():
-            self.pp_preview.setPixmap(pm.scaled(
-                self._PP_PREVIEW_W, self.pp_preview.height(),
-                Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation))
+        self._pp_preview_pm = QPixmap(str(wp.preview)) if wp.has_preview else QPixmap()
+        if not self._pp_preview_pm.isNull():
             self.pp_preview.setText("")
+            self._rescale_preview()
         else:
             self.pp_preview.setPixmap(QPixmap())
             self.pp_preview.setText("(pas d'aperçu)")

@@ -130,6 +130,11 @@ QScrollBar::handle:horizontal:hover {{ background: {BORDER_HI}; }}
 QScrollBar::add-line, QScrollBar::sub-line {{ width: 0; height: 0; }}
 QScrollBar::add-page, QScrollBar::sub-page {{ background: transparent; }}
 
+/* --- splitter handles between panels --- */
+QSplitter::handle {{ background: transparent; }}
+QSplitter::handle:horizontal {{ width: 8px; }}
+QSplitter::handle:hover {{ background: {BORDER}; border-radius: 2px; }}
+
 /* --- misc --- */
 QStatusBar {{ background: {GRID_BG}; color: {MUTED}; }}
 QStatusBar::item {{ border: none; }}
