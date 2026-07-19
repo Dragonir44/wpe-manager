@@ -714,6 +714,7 @@ class ChecksStrip(QScrollArea):
     def __init__(self):
         super().__init__()
         self._model: WallpaperModel | None = None
+        self._thumbs: dict[str, _StripThumb] = {}
         self.setObjectName("checksStrip")
         self.setWidgetResizable(True)
         self.setFixedHeight(self.THUMB_H + 16)
@@ -732,20 +733,42 @@ class ChecksStrip(QScrollArea):
         model.dataChanged.connect(self._on_data)
         self.refresh()
 
+    def wheelEvent(self, event) -> None:
+        # a vertical wheel scrolls the strip horizontally
+        bar = self.horizontalScrollBar()
+        delta = event.angleDelta().y() or event.angleDelta().x()
+        bar.setValue(bar.value() - delta)
+        event.accept()
+
+    def _scaled(self, row: int) -> QPixmap:
+        pm = self._model.data(self._model.index(row),
+                              Qt.ItemDataRole.DecorationRole)
+        if isinstance(pm, QPixmap) and not pm.isNull():
+            return pm.scaledToHeight(
+                self.THUMB_H, Qt.TransformationMode.SmoothTransformation)
+        return QPixmap()
+
     def _on_data(self, tl, br, roles) -> None:
-        # only rebuild if a *checked* row's thumbnail just arrived
+        # a checked thumbnail finished loading: update just that image in place
+        # (never rebuild here — a full rebuild per arrival is O(n²) and froze
+        # the UI when loading big playlists).
         if self._model is None:
             return
         if roles and Qt.ItemDataRole.DecorationRole not in roles:
             return
-        rows = {self._model._by_id[i] for i in self._model.checked_ids()
-                if i in self._model._by_id}
-        if any(tl.row() <= r <= br.row() for r in rows):
-            self.refresh()
+        for wid, thumb in self._thumbs.items():
+            row = self._model._by_id.get(wid)
+            if row is not None and tl.row() <= row <= br.row():
+                pm = self._scaled(row)
+                if not pm.isNull():
+                    thumb.setPixmap(pm)
 
     def refresh(self) -> None:
+        """Rebuild the strip to match the checked set. Called once per selection
+        change (not per thumbnail arrival)."""
         if self._model is None:
             return
+        self._thumbs.clear()
         while self._row.count() > 1:  # keep the trailing stretch
             item = self._row.takeAt(0)
             w = item.widget()
@@ -763,16 +786,12 @@ class ChecksStrip(QScrollArea):
             row = self._model._by_id.get(wid)
             if row is None:
                 continue
-            idx = self._model.index(row)
-            pm = self._model.data(idx, Qt.ItemDataRole.DecorationRole)
-            if isinstance(pm, QPixmap) and not pm.isNull():
-                pm = pm.scaledToHeight(
-                    self.THUMB_H, Qt.TransformationMode.SmoothTransformation)
-            thumb = _StripThumb(wid, pm)
-            wp = self._model.data(idx, WALLPAPER_ROLE)
+            thumb = _StripThumb(wid, self._scaled(row))
+            wp = self._model.data(self._model.index(row), WALLPAPER_ROLE)
             thumb.setToolTip(
                 (f"{wp.title}\n" if wp else "") + "Cliquer pour retirer")
             thumb.clicked.connect(self._remove)
+            self._thumbs[wid] = thumb
             self._row.insertWidget(self._row.count() - 1, thumb)
 
     def _remove(self, wid: str) -> None:
