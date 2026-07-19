@@ -934,6 +934,7 @@ class MainWindow(QMainWindow):
         self._reload_library()
         self._refresh_playlists()
         self._refresh_status()
+        self._on_screen_changed()  # load the active screen's playlist at startup
 
     # System tray ---------------------------------------------------------- #
     def _build_tray(self) -> None:
@@ -1895,7 +1896,20 @@ class MainWindow(QMainWindow):
             self._prune_incompatible_checks()
             self._update_count()
         screen = self._current_screen()
-        wid = self.controller.current_id(screen) if screen else None
+        if screen is None:
+            return
+        # Reflect what's on this screen (like WPE): load its playlist into the
+        # bottom bar, or select its single wallpaper in the grid.
+        a = self.controller.assignments.get(screen)
+        if a and a.get("mode") == "playlist":
+            name = a.get("playlist")
+            if name in self.controller.playlists:
+                if self.pl_combo.currentText() != name:
+                    self.pl_combo.setCurrentText(name)  # loads interval/order
+                self.model.set_checked(
+                    self.controller.playlists[name].get("ids", []))
+                return
+        wid = self.controller.current_id(screen)
         if not wid:
             return
         for row in range(self.proxy.rowCount()):
