@@ -924,13 +924,15 @@ class MainWindow(QMainWindow):
         root = QVBoxLayout(central)
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.setChildrenCollapsible(False)
+        splitter.addWidget(self._build_filter_panel())
         main = QWidget()
         main.setLayout(self._build_main_area())
         splitter.addWidget(main)
         splitter.addWidget(self._build_properties_panel())
-        splitter.setStretchFactor(0, 1)  # the grid takes the slack
-        splitter.setStretchFactor(1, 0)
-        splitter.setSizes([900, 320])
+        splitter.setStretchFactor(0, 0)
+        splitter.setStretchFactor(1, 1)  # the grid takes the slack
+        splitter.setStretchFactor(2, 0)
+        splitter.setSizes([210, 760, 320])
         root.addWidget(splitter, 1)
         root.addWidget(self._build_playlist_bar())
         self.setCentralWidget(central)
@@ -1152,6 +1154,80 @@ class MainWindow(QMainWindow):
         self._update_props_panel(wp)  # rebuild the form at defaults
         self.status.showMessage(f"Propriétés de « {wp.title} » réinitialisées.", 5000)
 
+    # -- left filter sidebar (WPE-style) ----------------------------------- #
+    def _build_filter_panel(self) -> QWidget:
+        panel = QFrame()
+        panel.setObjectName("filterPanel")
+        panel.setMinimumWidth(200)
+        v = QVBoxLayout(panel)
+        v.setContentsMargins(8, 8, 8, 8)
+
+        head = QHBoxLayout()
+        title = QLabel("Filtres")
+        title.setObjectName("filterTitle")
+        head.addWidget(title)
+        head.addStretch(1)
+        self.reset_filters_btn = QPushButton("Réinitialiser")
+        self.reset_filters_btn.clicked.connect(self._reset_filters)
+        head.addWidget(self.reset_filters_btn)
+        v.addLayout(head)
+
+        self.compat_check = QCheckBox("Compatible écran")
+        self.compat_check.setToolTip(
+            "N'affiche que les fonds dont le ratio correspond à l'écran "
+            "sélectionné (idéal pour l'ultrawide).")
+        self.compat_check.toggled.connect(self._on_compat_toggled)
+        v.addWidget(self.compat_check)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        content = QWidget()
+        cv = QVBoxLayout(content)
+        cv.setContentsMargins(0, 0, 4, 0)
+        self._type_boxes: list[QCheckBox] = []
+        self._age_boxes: list[QCheckBox] = []
+        self._res_boxes: list[QCheckBox] = []
+        self._genre_boxes: list[QCheckBox] = []
+        self._type_layout = self._add_filter_section(cv, "Type")
+        self._age_layout = self._add_filter_section(cv, "Âge")
+        self._res_layout = self._add_filter_section(cv, "Résolution")
+        self._genre_layout = self._add_filter_section(cv, "Genre", with_all_none=True)
+        cv.addStretch(1)
+        scroll.setWidget(content)
+        v.addWidget(scroll, 1)
+
+        self.sync_btn = QPushButton("Sync Steam")
+        self.sync_btn.setToolTip(
+            "Récupère la résolution des fonds depuis le Workshop Steam "
+            "(sans clé, mise en cache).")
+        self.sync_btn.clicked.connect(lambda: self._sync_metadata(force=True))
+        v.addWidget(self.sync_btn)
+        return panel
+
+    def _add_filter_section(self, parent_layout, title: str,
+                            with_all_none: bool = False):
+        header = QHBoxLayout()
+        lbl = QLabel(title)
+        lbl.setObjectName("filterSection")
+        header.addWidget(lbl)
+        if with_all_none:
+            header.addStretch(1)
+            all_btn = QPushButton("Tout")
+            all_btn.setObjectName("miniBtn")
+            all_btn.clicked.connect(lambda: self._set_all_genres(True))
+            none_btn = QPushButton("Aucun")
+            none_btn.setObjectName("miniBtn")
+            none_btn.clicked.connect(lambda: self._set_all_genres(False))
+            header.addWidget(all_btn)
+            header.addWidget(none_btn)
+        parent_layout.addLayout(header)
+        box = QVBoxLayout()
+        box.setContentsMargins(6, 0, 0, 8)
+        box.setSpacing(1)
+        parent_layout.addLayout(box)
+        return box
+
     def _build_main_area(self) -> QVBoxLayout:
         area = QVBoxLayout()
 
@@ -1226,44 +1302,16 @@ class MainWindow(QMainWindow):
         self.paths_btn = QPushButton("Chemins…")
         self.paths_btn.clicked.connect(self._edit_paths)
         bar2.addWidget(self.paths_btn)
-        area.addLayout(bar2)
-
-        bar3 = FlowLayout()
-        bar3.addWidget(QLabel("Filtres :"))
-        self.genre_btn = QPushButton("Genre")
-        self.type_btn = QPushButton("Type")
-        self.age_btn = QPushButton("Âge")
-        self.res_btn = QPushButton("Résolution")
-        for b in (self.genre_btn, self.type_btn, self.age_btn, self.res_btn):
-            b._base_label = b.text()
-            bar3.addWidget(b)
-        self.compat_check = QCheckBox("Compatible écran")
-        self.compat_check.setToolTip(
-            "N'affiche que les fonds dont le ratio correspond à l'écran "
-            "sélectionné en haut (idéal pour l'ultrawide)."
-        )
-        self.compat_check.toggled.connect(self._on_compat_toggled)
-        bar3.addWidget(self.compat_check)
-        self.reset_filters_btn = QPushButton("Réinitialiser")
-        self.reset_filters_btn.clicked.connect(self._reset_filters)
-        bar3.addWidget(self.reset_filters_btn)
-        bar3.addWidget(QLabel("Tri :"))
+        bar2.addWidget(QLabel("Tri :"))
         self.sort_combo = QComboBox()
         self.sort_combo.addItem("Titre A→Z", "title")
         self.sort_combo.addItem("Taille ↑", "size_asc")
         self.sort_combo.addItem("Taille ↓", "size_desc")
         self.sort_combo.currentIndexChanged.connect(self._on_sort_changed)
-        bar3.addWidget(self.sort_combo)
+        bar2.addWidget(self.sort_combo)
         self.count_label = QLabel("—")
-        bar3.addWidget(self.count_label)
-        self.sync_btn = QPushButton("Sync Steam")
-        self.sync_btn.setToolTip(
-            "Récupère la résolution des fonds depuis le Workshop Steam "
-            "(sans clé, mise en cache)."
-        )
-        self.sync_btn.clicked.connect(lambda: self._sync_metadata(force=True))
-        bar3.addWidget(self.sync_btn)
-        area.addLayout(bar3)
+        bar2.addWidget(self.count_label)
+        area.addLayout(bar2)
 
         self.view = QListView()
         self.view.setObjectName("grid")
@@ -1324,7 +1372,7 @@ class MainWindow(QMainWindow):
         self.view.selectionModel().selectionChanged.connect(
             lambda *_: self._on_selection_changed()
         )
-        self._populate_filter_menus()
+        self._populate_filters()
         self._update_count()
         self._on_checked_changed()
         self._on_selection_changed()
@@ -1339,24 +1387,26 @@ class MainWindow(QMainWindow):
         self.uncheck_btn.setEnabled(n > 0)
 
     # Filters --------------------------------------------------------------- #
-    def _populate_filter_menus(self) -> None:
+    def _populate_filters(self) -> None:
         items = getattr(self.model, "_items", [])
         genres = sorted({t for w in items for t in w.tags}, key=str.casefold)
         types = sorted({w.type for w in items if w.type})
         ages = [a for a in ("everyone", "questionable", "mature")
                 if any(w.age == a for w in items)]
-        self._install_menu(self.genre_btn, [(g, g) for g in genres], self.proxy.genres)
-        self._install_menu(self.type_btn,
-                           [(t, t.capitalize()) for t in types], self.proxy.types)
-        self._install_menu(self.age_btn,
-                           [(a, AGE_LABELS.get(a, a)) for a in ages], self.proxy.ages)
-        self._build_resolution_menu()
+        self._fill_filter_section(self._type_layout,
+                                  [(t, t.capitalize()) for t in types],
+                                  self.proxy.types, self._type_boxes)
+        self._fill_filter_section(self._age_layout,
+                                  [(a, AGE_LABELS.get(a, a)) for a in ages],
+                                  self.proxy.ages, self._age_boxes)
+        self._fill_filter_section(self._genre_layout, [(g, g) for g in genres],
+                                  self.proxy.genres, self._genre_boxes)
+        self._build_resolution_section()
 
-    def _build_resolution_menu(self) -> None:
-        """The resolution menu is data-driven: it lists the exact resolutions
-        actually present (grouped by family, with counts), so it stays useful
-        whatever the library holds. Rebuilt after a Steam sync; the current
-        selection is preserved across the rebuild."""
+    def _build_resolution_section(self) -> None:
+        """Data-driven: lists the exact resolutions actually present (grouped by
+        family, with counts). Rebuilt after a Steam sync; the current selection
+        is preserved across the rebuild."""
         items = getattr(self.model, "_items", [])
         counts: Counter = Counter()
         no_res = 0
@@ -1382,31 +1432,48 @@ class MainWindow(QMainWindow):
             pairs.append((WallpaperFilterProxy.NO_RES, f"(sans résolution) ({no_res})"))
 
         keep = set(self.proxy.resolutions)
-        self._install_menu(self.res_btn, pairs, self.proxy.resolutions)
+        self._fill_filter_section(self._res_layout, pairs,
+                                  self.proxy.resolutions, self._res_boxes)
         if keep:  # restore selection across the rebuild
-            for act in self.res_btn.menu().actions():
-                if act.data() in keep:
-                    act.setChecked(True)
+            for cb in self._res_boxes:
+                if cb.property("fvalue") in keep:
+                    cb.setChecked(True)
 
-    def _install_menu(self, button, pairs, target_set) -> None:
+    def _fill_filter_section(self, box, pairs, target_set, store) -> None:
+        store.clear()
         target_set.clear()
-        button.setText(button._base_label)
-        menu = QMenu(button)
+        while box.count():
+            item = box.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.setParent(None)
+                w.deleteLater()
         for value, label in pairs:
-            act = menu.addAction(label)
-            act.setCheckable(True)
-            act.setData(value)
-            act.toggled.connect(
-                lambda on, v=value, s=target_set, b=button: self._toggle_filter(s, v, on, b)
-            )
+            cb = QCheckBox(label)
+            cb.setProperty("fvalue", value)
+            cb.toggled.connect(
+                lambda on, v=value, s=target_set: self._toggle_filter(s, v, on))
+            box.addWidget(cb)
+            store.append(cb)
         if not pairs:
-            menu.addAction("(aucun)").setEnabled(False)
-        button.setMenu(menu)
+            empty = QLabel("(aucun)")
+            empty.setObjectName("filterEmpty")
+            box.addWidget(empty)
 
-    def _toggle_filter(self, target_set: set, value: str, on: bool, button) -> None:
+    def _toggle_filter(self, target_set: set, value: str, on: bool) -> None:
         target_set.add(value) if on else target_set.discard(value)
-        n = len(target_set)
-        button.setText(f"{button._base_label} ({n})" if n else button._base_label)
+        self.proxy.invalidate()
+        self._update_count()
+
+    def _set_all_genres(self, on: bool) -> None:
+        s = self.proxy.genres
+        for cb in self._genre_boxes:
+            cb.blockSignals(True)
+            cb.setChecked(on)
+            cb.blockSignals(False)
+        s.clear()
+        if on:
+            s.update(cb.property("fvalue") for cb in self._genre_boxes)
         self.proxy.invalidate()
         self._update_count()
 
@@ -1444,14 +1511,15 @@ class MainWindow(QMainWindow):
         self.search.clear()
         self.proxy.text = ""
         self.compat_check.setChecked(False)
-        for btn, s in ((self.genre_btn, self.proxy.genres),
-                       (self.type_btn, self.proxy.types),
-                       (self.age_btn, self.proxy.ages),
-                       (self.res_btn, self.proxy.resolutions)):
+        for boxes, s in ((self._genre_boxes, self.proxy.genres),
+                         (self._type_boxes, self.proxy.types),
+                         (self._age_boxes, self.proxy.ages),
+                         (self._res_boxes, self.proxy.resolutions)):
+            for cb in boxes:
+                cb.blockSignals(True)
+                cb.setChecked(False)
+                cb.blockSignals(False)
             s.clear()
-            btn.setText(btn._base_label)
-            for act in (btn.menu().actions() if btn.menu() else []):
-                act.setChecked(False)
         self.proxy.compat_ratio = None
         self.proxy.invalidate()
         self._update_count()
@@ -1492,7 +1560,7 @@ class MainWindow(QMainWindow):
         self.metadata.update(result)
         config.save_metadata(self.metadata)
         self.model.set_metadata(self.metadata)
-        self._build_resolution_menu()  # new resolutions are now known
+        self._build_resolution_section()  # new resolutions are now known
         self.proxy.invalidate()
         self._syncing = False
         self.sync_btn.setEnabled(True)

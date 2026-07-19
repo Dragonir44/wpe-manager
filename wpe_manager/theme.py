@@ -102,6 +102,17 @@ QListView#grid {{
     background: {GRID_BG}; border: 1px solid #2a2d33; border-radius: 8px;
 }}
 
+/* --- left-side filter sidebar --- */
+QFrame#filterPanel {{
+    background: {PANEL}; border: 1px solid #33373e; border-radius: 10px;
+}}
+QLabel#filterTitle {{ font-size: 14px; font-weight: 600; }}
+QLabel#filterSection {{
+    color: {MUTED}; font-weight: 600; padding-top: 6px;
+}}
+QLabel#filterEmpty {{ color: {MUTED}; }}
+QPushButton#miniBtn {{ padding: 1px 7px; font-size: 11px; }}
+
 /* --- right-side properties panel --- */
 QFrame#propsPanel {{
     background: {PANEL}; border: 1px solid #33373e; border-radius: 10px;
