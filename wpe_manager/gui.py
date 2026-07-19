@@ -1155,6 +1155,13 @@ class MainWindow(QMainWindow):
         self.order_combo.currentIndexChanged.connect(self._on_pl_settings_changed)
         controls.addWidget(self.order_combo)
 
+        self.config_pl_btn = QPushButton("Configurer…")
+        self.config_pl_btn.setToolTip(
+            "Options avancées de la playlist : intervalle (h+min), ordre, "
+            "démarrage sur le premier fond, transition propre à la playlist.")
+        self.config_pl_btn.clicked.connect(self._open_playlist_config)
+        controls.addWidget(self.config_pl_btn)
+
         self.import_btn = QPushButton("Importer WPE")
         self.import_btn.setToolTip("Importer les playlists depuis Wallpaper Engine.")
         self.import_btn.clicked.connect(self._import_wpe)
@@ -1892,6 +1899,79 @@ class MainWindow(QMainWindow):
         pl["order"] = "random" if self.order_combo.currentIndex() == 1 else "sequential"
         self.controller.upsert_playlist(pl)
         self.controller.apply()  # re-arm timers with the new interval
+
+    def _open_playlist_config(self) -> None:
+        """Advanced per-playlist settings dialog (WPE's « Configurer »)."""
+        name = self._selected_playlist_name()
+        pl = self.controller.playlists.get(name) if name else None
+        if not pl:
+            self.status.showMessage("Sélectionne une playlist à configurer.", 4000)
+            return
+        dlg = QDialog(self)
+        dlg.setWindowTitle(f"Configurer — {name}")
+        form = QFormLayout(dlg)
+
+        interval = int(pl.get("interval_min", 30))
+        h_spin = QSpinBox()
+        h_spin.setRange(0, 24)
+        h_spin.setValue(interval // 60)
+        m_spin = QSpinBox()
+        m_spin.setRange(0, 59)
+        m_spin.setValue(interval % 60)
+        hbox = QHBoxLayout()
+        hbox.addWidget(h_spin)
+        hbox.addWidget(QLabel("h"))
+        hbox.addWidget(m_spin)
+        hbox.addWidget(QLabel("min"))
+        hbox.addStretch(1)
+        form.addRow("Intervalle :", hbox)
+
+        order_combo = QComboBox()
+        order_combo.addItems(["Séquentiel", "Aléatoire"])
+        order_combo.setCurrentIndex(1 if pl.get("order") == "random" else 0)
+        form.addRow("Ordre :", order_combo)
+
+        first_check = QCheckBox("Démarrer toujours sur le premier fond")
+        first_check.setToolTip(
+            "Sinon, une playlist aléatoire démarre sur un fond au hasard.")
+        first_check.setChecked(bool(pl.get("start_first")))
+        form.addRow(first_check)
+
+        overlap = pl.get("overlap_ms")
+        global_check = QCheckBox(
+            f"Utiliser la transition globale ({self.cfg.overlap_ms} ms)")
+        global_check.setChecked(overlap is None)
+        ov_spin = QSpinBox()
+        ov_spin.setRange(0, 5000)
+        ov_spin.setSingleStep(100)
+        ov_spin.setValue(self.cfg.overlap_ms if overlap is None else int(overlap))
+        ov_spin.setEnabled(overlap is not None)
+        global_check.toggled.connect(lambda on: ov_spin.setEnabled(not on))
+        form.addRow(global_check)
+        form.addRow("Transition (ms) :", ov_spin)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok
+            | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(dlg.accept)
+        buttons.rejected.connect(dlg.reject)
+        form.addRow(buttons)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        interval_min = min(1440, max(1, h_spin.value() * 60 + m_spin.value()))
+        pl["interval_min"] = interval_min
+        pl["order"] = "random" if order_combo.currentIndex() == 1 else "sequential"
+        pl["start_first"] = first_check.isChecked()
+        pl["overlap_ms"] = None if global_check.isChecked() else ov_spin.value()
+        self.controller.upsert_playlist(pl)
+        # keep the inline interval/order widgets in sync
+        self._loading_pl = True
+        self.interval_spin.setValue(interval_min)
+        self.order_combo.setCurrentIndex(1 if pl["order"] == "random" else 0)
+        self._loading_pl = False
+        self.controller.apply()
+        self.status.showMessage(f"« {name} » configurée.", 4000)
 
     def _import_wpe(self) -> None:
         path = config.wpe_config_path(self.cfg)

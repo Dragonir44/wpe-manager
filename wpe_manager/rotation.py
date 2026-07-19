@@ -69,8 +69,30 @@ class RotationController(QObject):
         if name not in self.playlists:
             return
         self.assignments[screen] = {"mode": "playlist", "playlist": name}
-        self._pos[screen] = 0
+        self._pos[screen] = self._start_pos(name)
         self.apply()
+
+    def _start_pos(self, name: str) -> int:
+        """Where a playlist begins when (re)started: the first wallpaper if
+        'start_first' is set or the order is sequential; a random one if the
+        order is random (so random playlists don't always open on item 0)."""
+        pl = self.playlists.get(name)
+        ids = pl.get("ids", []) if pl else []
+        if not ids:
+            return 0
+        if pl.get("start_first") or pl.get("order") != "random":
+            return 0
+        return random.randrange(len(ids))
+
+    def _overlap_for(self, screen: str) -> int:
+        """Transition (overlap) in ms for a screen: a per-playlist override if
+        set, otherwise the global setting."""
+        a = self.assignments.get(screen)
+        if a and a.get("mode") == "playlist":
+            pl = self.playlists.get(a.get("playlist", ""))
+            if pl and pl.get("overlap_ms") is not None:
+                return int(pl["overlap_ms"])
+        return int(self.cfg.overlap_ms)
 
     def clear(self, screen: str) -> None:
         self.assignments.pop(screen, None)
@@ -151,10 +173,15 @@ class RotationController(QObject):
         engine.register(screen, new_pid, wid)
         old_pid = old.get("pid") if old else None
         if engine.alive(old_pid):
-            delay = max(0, int(self.cfg.overlap_ms))
+            delay = max(0, self._overlap_for(screen))
             QTimer.singleShot(delay, lambda p=old_pid: engine.kill_pid(p))
 
     def apply(self) -> None:
+        # Initialise the start position for playlist screens not yet started
+        # this session (so random playlists open on a random wallpaper).
+        for screen, a in self.assignments.items():
+            if a.get("mode") == "playlist" and screen not in self._pos:
+                self._pos[screen] = self._start_pos(a.get("playlist", ""))
         concrete = self._concrete()
         # Stop screens that are no longer assigned.
         for screen in list(engine.snapshot()):
