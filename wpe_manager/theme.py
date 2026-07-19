@@ -112,6 +112,7 @@ QLabel#filterSection {{
 }}
 QLabel#filterEmpty {{ color: {MUTED}; }}
 QPushButton#miniBtn {{ padding: 1px 7px; font-size: 11px; }}
+QLabel#screenAssign {{ color: {MUTED}; padding: 2px 0; }}
 
 /* --- right-side properties panel --- */
 QFrame#propsPanel {{

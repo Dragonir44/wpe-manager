@@ -1030,6 +1030,7 @@ class MainWindow(QMainWindow):
     # UI construction ------------------------------------------------------ #
     def _build_ui(self) -> None:
         self._build_settings_dialog()
+        self._build_screen_dialog()
         central = QWidget()
         root = QVBoxLayout(central)
         splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -1402,31 +1403,66 @@ class MainWindow(QMainWindow):
         self._settings_dialog.raise_()
         self._settings_dialog.activateWindow()
 
+    # -- screen picker popup (WPE-style) ----------------------------------- #
+    def _build_screen_dialog(self) -> None:
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Écrans")
+        dlg.setModal(False)
+        v = QVBoxLayout(dlg)
+        v.addWidget(QLabel("Clique un écran, puis choisis ce qu'il affiche :"))
+
+        self.screen_picker = ScreenPicker()
+        self.screen_picker.setMinimumHeight(100)
+        self.screen_picker.selected.connect(lambda _n: self._on_screen_changed())
+        v.addWidget(self.screen_picker)
+
+        self.screen_assign_label = QLabel("—")
+        self.screen_assign_label.setObjectName("screenAssign")
+        v.addWidget(self.screen_assign_label)
+
+        row = QHBoxLayout()
+        self.apply_single_btn = QPushButton("Fond sélectionné → cet écran")
+        self.apply_single_btn.setProperty("accent", True)
+        self.apply_single_btn.clicked.connect(self._apply_single)
+        row.addWidget(self.apply_single_btn)
+        self.apply_pl_btn = QPushButton("Playlist courante → cet écran")
+        self.apply_pl_btn.setProperty("accent", True)
+        self.apply_pl_btn.clicked.connect(self._apply_playlist)
+        row.addWidget(self.apply_pl_btn)
+        self.clear_btn = QPushButton("Vider cet écran")
+        self.clear_btn.clicked.connect(self._clear_selected)
+        row.addWidget(self.clear_btn)
+        v.addLayout(row)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        buttons.rejected.connect(dlg.hide)
+        v.addWidget(buttons)
+        self._screen_dialog = dlg
+        self._populate_screens()
+
+    def _open_screen_dialog(self) -> None:
+        self._update_screen_dialog_label()
+        self._screen_dialog.show()
+        self._screen_dialog.raise_()
+        self._screen_dialog.activateWindow()
+
+    def _update_screen_dialog_label(self) -> None:
+        if not hasattr(self, "screen_assign_label"):
+            return
+        screen = self._current_screen()
+        self.screen_assign_label.setText(
+            "—" if screen is None
+            else f"Écran {screen} → {self.controller.describe(screen)}")
+
     def _build_main_area(self) -> QVBoxLayout:
         area = QVBoxLayout()
 
         bar = FlowLayout()
-        bar.addWidget(QLabel("Écrans :"))
-        self.screen_picker = ScreenPicker()
-        self.screen_picker.selected.connect(lambda _n: self._on_screen_changed())
-        self._populate_screens()
-        bar.addWidget(self.screen_picker)
-
-        self.apply_single_btn = QPushButton("Fond sélectionné → écran")
-        self.apply_single_btn.setProperty("accent", True)
-        self.apply_single_btn.clicked.connect(self._apply_single)
-        bar.addWidget(self.apply_single_btn)
-
-        self.apply_pl_combo = QComboBox()
-        bar.addWidget(self.apply_pl_combo)
-        self.apply_pl_btn = QPushButton("Playlist → écran")
-        self.apply_pl_btn.setProperty("accent", True)
-        self.apply_pl_btn.clicked.connect(self._apply_playlist)
-        bar.addWidget(self.apply_pl_btn)
-
-        self.clear_btn = QPushButton("Vider l'écran")
-        self.clear_btn.clicked.connect(self._clear_selected)
-        bar.addWidget(self.clear_btn)
+        self.screens_btn = QPushButton("🖥 Écrans…")
+        self.screens_btn.setToolTip(
+            "Choisir un écran et lui assigner un fond ou une playlist.")
+        self.screens_btn.clicked.connect(self._open_screen_dialog)
+        bar.addWidget(self.screens_btn)
         self.settings_btn = QPushButton("⚙ Réglages")
         self.settings_btn.setToolTip("Audio, FPS, transition, autostart, chemins…")
         self.settings_btn.clicked.connect(self._open_settings)
@@ -1718,8 +1754,6 @@ class MainWindow(QMainWindow):
         if current and current in names:
             self.pl_combo.setCurrentText(current)
         self.pl_combo.blockSignals(False)
-        self.apply_pl_combo.clear()
-        self.apply_pl_combo.addItems(names)
         self._on_playlist_selected(self.pl_combo.currentText())
 
     def _selected_playlist_name(self) -> str | None:
@@ -1852,16 +1886,18 @@ class MainWindow(QMainWindow):
 
     def _apply_playlist(self) -> None:
         screen = self._current_screen()
-        name = self.apply_pl_combo.currentText()
-        if not screen or not name:
-            self.status.showMessage("Choisis un écran et une playlist.", 4000)
+        name = self.pl_combo.currentText()
+        if screen is None or not name:
+            self.status.showMessage(
+                "Choisis un écran (popup Écrans) et une playlist (bandeau bas).",
+                4000)
             return
         self.controller.assign_playlist(screen, name)
         self.status.showMessage(f"Playlist « {name} » → {screen}", 5000)
 
     def _clear_selected(self) -> None:
         screen = self._current_screen()
-        if screen:
+        if screen is not None:
             self.controller.clear(screen)
             self.status.showMessage(f"Écran {screen} vidé.", 4000)
 
@@ -1874,6 +1910,7 @@ class MainWindow(QMainWindow):
             parts.append(f"{name} → {desc}")
         if hasattr(self, "screen_picker"):
             self.screen_picker.set_assignments(assignments)
+        self._update_screen_dialog_label()
         running = "▶ en cours" if engine.is_running() else "■ arrêté"
         self.setWindowTitle(f"Wallpaper Engine Manager — {running}   [{'  |  '.join(parts)}]")
         if getattr(self, "_tray", None) is not None:
@@ -1926,6 +1963,7 @@ class MainWindow(QMainWindow):
             self._prune_incompatible_checks()
             self._update_count()
         screen = self._current_screen()
+        self._update_screen_dialog_label()
         if screen is None:
             return
         # Reflect what's on this screen (like WPE): load its playlist into the
