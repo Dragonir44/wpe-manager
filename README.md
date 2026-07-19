@@ -1,10 +1,14 @@
 # Wallpaper Engine Manager
 
-Une petite GUI native (PySide6/Qt) au-dessus de
+Une GUI native (PySide6/Qt) au-dessus de
 [`linux-wallpaperengine`](https://github.com/Almamu/linux-wallpaperengine).
 Elle fait ce que les frontends existants faisaient mal : gérer correctement une
 bibliothèque Steam sur un autre disque, transmettre le bon `--assets-dir`, et
 proposer des **playlists tournantes par écran** — le tout en restant fluide.
+
+L'interface reprend les **codes visuels de Wallpaper Engine** (thème sombre,
+sidebar de filtres à gauche, panneau de propriétés à droite, bande playlist en
+bas, sélecteur d'écran visuel) pour une prise en main immédiate.
 
 Testé sur KDE Plasma 6 / Wayland (CachyOS), mais ne dépend d'aucune API KDE.
 
@@ -24,25 +28,32 @@ Testé sur KDE Plasma 6 / Wayland (CachyOS), mais ne dépend d'aucune API KDE.
   cache (`metadata.json`) — instantané et hors-ligne ensuite. Bouton « Sync Steam »
   et sync auto au premier lancement.
 - **Un process par écran** : changer un écran ne redémarre pas les autres.
-- **Assignation par écran** : un **fond fixe** ou une **playlist tournante**.
-- **Playlists** créées par **cases à cocher** dans la grille, avec **intervalle**
-  et **ordre** (séquentiel / aléatoire).
+- **Sélecteur d'écran visuel** (popup *Écrans…*) : les moniteurs sont dessinés
+  selon leur disposition réelle ; on clique un écran puis on lui assigne un
+  **fond fixe** ou la **playlist courante**. Sélectionner un écran recharge ce
+  qu'il affiche.
+- **Playlists** créées par **cases à cocher** dans la grille, avec une **bande
+  de vignettes** en bas (clic = aperçu, × au survol = retirer). **Intervalle**
+  et **ordre** (séquentiel / aléatoire) en ligne ; bouton *Configurer…* pour les
+  options avancées par playlist : intervalle en h + min, **démarrage sur le
+  premier fond**, et **transition propre à la playlist**. Une playlist aléatoire
+  démarre sur un fond au hasard.
+- **Panneau de propriétés** (à droite) : personnalise le fond sélectionné
+  (couleurs, curseurs, cases, listes). Enregistré par fond et réappliqué à chaque
+  lancement via `--set-property` ; si le fond est affiché, il se recharge aussitôt.
 - **Import depuis Wallpaper Engine** : récupère les playlists du `config.json`
   de WPE (extrait les IDs, ignore les chemins/moniteurs Windows non portables).
-- **Propriétés par fond** : bouton *Propriétés…* pour personnaliser un fond
-  (couleurs, curseurs, cases à cocher, listes de choix). Les réglages sont
-  enregistrés par fond et réappliqués à chaque lancement via `--set-property` ;
-  si le fond est affiché, il se recharge aussitôt.
 - **Transition sans coupure** : le nouveau fond est affiché *par-dessus* l'ancien
   avant que celui-ci soit tué (pas de fondu alpha — le backend ne le permet pas —
   mais plus de flash du fond de bureau entre deux).
 - **Barre système (systray)** : fermer la fenêtre la réduit dans le tray ; la
   **rotation continue** en arrière-plan. Le menu de l'icône permet de changer la
   playlist de chaque écran, de vider un écran, de tout arrêter, et de rouvrir.
-- **Démarrage avec la session** : une case (ou l'entrée du menu tray) installe
-  un lanceur autostart qui relance l'app dans le tray et **restaure les fonds
-  (rotation comprise)** à l'ouverture de session.
-- **Options** : muet, FPS, durée de transition (ms).
+- **Démarrage avec la session** : une case (dans *⚙ Réglages* ou le menu tray)
+  installe un lanceur autostart qui relance l'app dans le tray et **restaure les
+  fonds (rotation comprise)** à l'ouverture de session.
+- **⚙ Réglages** : audio (muet), FPS, durée de transition globale, chemins de la
+  bibliothèque, autostart, entrée du menu applications.
 
 ## Prérequis
 
@@ -86,14 +97,18 @@ wpe-manager
 
 ## Utilisation
 
-1. Choisis un **écran** dans le menu en haut.
-2. Clique un fond (ou double-clic) → **Fond sélectionné → écran** pour un fond fixe.
-3. Pour une rotation : coche des fonds → **Nouvelle (depuis cochés)**, nomme la
-   playlist, règle **intervalle** + **ordre**, puis **Playlist → écran**.
-4. **Vider l'écran** / **Tout arrêter** au besoin.
+1. **Fond fixe** : clique un fond dans la grille → **🖥 Écrans…**, clique un
+   écran → **Fond sélectionné → cet écran**.
+2. **Playlist tournante** : coche des fonds dans la grille (ils apparaissent dans
+   la bande du bas) → **Nouvelle**, nomme la playlist, règle l'**intervalle** et
+   l'**ordre** (ou **Configurer…** pour les options avancées) → **🖥 Écrans…**,
+   clique un écran → **Playlist courante → cet écran**.
+3. Pour éditer une playlist existante : choisis-la dans le menu déroulant du bas
+   (ça la charge), modifie les cases cochées, puis **MàJ items**.
+4. **Vider cet écran** / **Tout arrêter** depuis le popup Écrans / ⚙ Réglages.
 
-Si la bibliothèque n'est pas trouvée automatiquement, bouton **Chemins…** pour la
-pointer à la main.
+Si la bibliothèque n'est pas trouvée automatiquement, ouvre **⚙ Réglages →
+Chemins de la bibliothèque…** pour la pointer à la main.
 
 > Fermer la fenêtre la **réduit dans la barre système** : la rotation continue.
 > Clic sur l'icône pour rouvrir, clic droit → **Quitter** pour fermer réellement.
