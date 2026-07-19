@@ -691,25 +691,69 @@ class PropertyForm(QWidget):
 # Bottom playlist strip
 # --------------------------------------------------------------------------- #
 class _StripThumb(QLabel):
-    """A clickable thumbnail in the playlist strip; clicking removes it."""
-    clicked = Signal(str)
+    """A thumbnail in the playlist strip (WPE-style): clicking the body selects
+    the wallpaper (preview); a red × appears on hover to remove it."""
+    activated = Signal(str)  # click body -> preview/select in the grid
+    removed = Signal(str)    # click the × -> remove from the selection
+
+    _X = 16  # remove-badge diameter (px)
 
     def __init__(self, wid: str, pm: QPixmap):
         super().__init__()
         self._wid = wid
+        self._hover = False
         if isinstance(pm, QPixmap) and not pm.isNull():
             self.setPixmap(pm)
         self.setObjectName("stripThumb")
         self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setMouseTracking(True)
+
+    def enterEvent(self, event) -> None:
+        self._hover = True
+        self.update()
+
+    def leaveEvent(self, event) -> None:
+        self._hover = False
+        self.update()
+
+    def _x_rect(self) -> QRectF:
+        return QRectF(self.width() - self._X - 2, 2, self._X, self._X)
+
+    def paintEvent(self, event) -> None:
+        super().paintEvent(event)  # the pixmap
+        if not self._hover:
+            return
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        r = self._x_rect()
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(theme.DANGER))
+        painter.drawEllipse(r)
+        pen = QPen(QColor("#ffffff"))
+        pen.setWidthF(1.7)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        painter.setPen(pen)
+        m = r.width() * 0.3
+        painter.drawLine(QPointF(r.left() + m, r.top() + m),
+                         QPointF(r.right() - m, r.bottom() - m))
+        painter.drawLine(QPointF(r.left() + m, r.bottom() - m),
+                         QPointF(r.right() - m, r.top() + m))
 
     def mousePressEvent(self, event) -> None:
-        if event.button() == Qt.MouseButton.LeftButton:
-            self.clicked.emit(self._wid)
+        if event.button() != Qt.MouseButton.LeftButton:
+            return
+        if self._hover and self._x_rect().contains(event.position()):
+            self.removed.emit(self._wid)
+        else:
+            self.activated.emit(self._wid)
 
 
 class ChecksStrip(QScrollArea):
     """Horizontal strip of the currently checked wallpapers (the working
-    playlist), WPE-style. Click a thumbnail to remove it from the selection."""
+    playlist), WPE-style. Click a thumbnail to preview it; hover shows a × to
+    remove it from the selection."""
+
+    activated = Signal(str)  # a thumbnail was clicked (preview it)
 
     THUMB_H = 58
 
@@ -791,8 +835,10 @@ class ChecksStrip(QScrollArea):
             thumb = _StripThumb(wid, self._scaled(row))
             wp = self._model.data(self._model.index(row), WALLPAPER_ROLE)
             thumb.setToolTip(
-                (f"{wp.title}\n" if wp else "") + "Cliquer pour retirer")
-            thumb.clicked.connect(self._remove)
+                (f"{wp.title}\n" if wp else "")
+                + "Clic : aperçu · × : retirer")
+            thumb.activated.connect(self.activated)
+            thumb.removed.connect(self._remove)
             self._thumbs[wid] = thumb
             self._row.insertWidget(self._row.count() - 1, thumb)
 
@@ -1035,7 +1081,8 @@ class MainWindow(QMainWindow):
         root = QVBoxLayout(central)
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.setChildrenCollapsible(False)
-        splitter.addWidget(self._build_filter_panel())
+        self._filter_panel = self._build_filter_panel()
+        splitter.addWidget(self._filter_panel)
         main = QWidget()
         main.setLayout(self._build_main_area())
         splitter.addWidget(main)
@@ -1065,18 +1112,18 @@ class MainWindow(QMainWindow):
         controls.addWidget(QLabel("Playlist :"))
         self.pl_combo = QComboBox()
         self.pl_combo.setMinimumWidth(160)
+        self.pl_combo.setToolTip(
+            "Choisir une playlist la charge (fonds + intervalle + ordre).")
+        # currentTextChanged fires on programmatic set too (interval/order only);
+        # `activated` fires ONLY on a user pick -> then load the wallpapers, so
+        # programmatic selection never clobbers the working set.
         self.pl_combo.currentTextChanged.connect(self._on_playlist_selected)
+        self.pl_combo.activated.connect(
+            lambda _i: self._load_playlist_into_checks())
         controls.addWidget(self.pl_combo)
         self.pl_count = QLabel("—")
         self.pl_count.setObjectName("plCount")
         controls.addWidget(self.pl_count)
-
-        self.load_pl_btn = QPushButton("Charger")
-        self.load_pl_btn.setToolTip(
-            "Coche dans la grille les fonds de la playlist sélectionnée "
-            "(pour l'éditer via « MàJ items » ou la forker via « Nouvelle »).")
-        self.load_pl_btn.clicked.connect(self._load_playlist_into_checks)
-        controls.addWidget(self.load_pl_btn)
 
         self.new_pl_btn = QPushButton("Nouvelle")
         self.new_pl_btn.setProperty("accent", True)
@@ -1458,6 +1505,13 @@ class MainWindow(QMainWindow):
         area = QVBoxLayout()
 
         bar = FlowLayout()
+        self.filters_btn = QPushButton("☰ Filtres")
+        self.filters_btn.setCheckable(True)
+        self.filters_btn.setChecked(True)
+        self.filters_btn.setToolTip("Afficher / masquer le panneau des filtres.")
+        self.filters_btn.toggled.connect(
+            lambda on: self._filter_panel.setVisible(on))
+        bar.addWidget(self.filters_btn)
         self.screens_btn = QPushButton("🖥 Écrans…")
         self.screens_btn.setToolTip(
             "Choisir un écran et lui assigner un fond ou une playlist.")
@@ -1542,6 +1596,7 @@ class MainWindow(QMainWindow):
         self.proxy.modelReset.connect(self._update_count)
         self.model.checked_changed.connect(self._on_checked_changed)
         self.checks_strip.set_model(self.model)
+        self.checks_strip.activated.connect(self._select_in_grid)
         self.view.selectionModel().selectionChanged.connect(
             lambda *_: self._on_selection_changed()
         )
@@ -1981,15 +2036,17 @@ class MainWindow(QMainWindow):
         # and select its single wallpaper in the grid if it has one.
         self.model.clear_checks()
         wid = self.controller.current_id(screen)
-        if not wid:
-            return
+        if wid:
+            self._select_in_grid(wid)
+
+    def _select_in_grid(self, wid: str) -> None:
         for row in range(self.proxy.rowCount()):
             idx = self.proxy.index(row, 0)
             wp = idx.data(WALLPAPER_ROLE)
             if wp and wp.id == wid:
                 self.view.setCurrentIndex(idx)
                 self.view.scrollTo(idx)
-                break
+                return
 
     def _on_search(self, text: str) -> None:
         self.proxy.text = text

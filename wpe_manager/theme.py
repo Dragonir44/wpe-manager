@@ -46,6 +46,7 @@ QPushButton {{
 QPushButton:hover {{ background: {SURFACE_HI}; border-color: {BORDER_HI}; }}
 QPushButton:pressed {{ background: {PANEL}; }}
 QPushButton:disabled {{ color: {MUTED}; background: {PANEL}; border-color: #2f333a; }}
+QPushButton:checked {{ background: {ACCENT}; color: {ON_ACCENT}; border-color: {ACCENT}; }}
 
 /* primary / accent buttons (setProperty("accent", True)) */
 QPushButton[accent="true"] {{
@@ -95,7 +96,7 @@ QScrollArea#checksStrip {{
 QScrollArea#checksStrip QWidget {{ background: transparent; }}
 QLabel#stripEmpty {{ color: {MUTED}; padding: 0 4px; }}
 QLabel#stripThumb {{ border: 1px solid {BORDER}; border-radius: 3px; }}
-QLabel#stripThumb:hover {{ border: 2px solid {DANGER}; }}
+QLabel#stripThumb:hover {{ border: 2px solid {ACCENT}; }}
 
 /* --- the thumbnail grid --- */
 QListView#grid {{
