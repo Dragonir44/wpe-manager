@@ -801,6 +801,113 @@ class ChecksStrip(QScrollArea):
 
 
 # --------------------------------------------------------------------------- #
+# Visual screen picker
+# --------------------------------------------------------------------------- #
+class ScreenPicker(QWidget):
+    """A compact visual monitor selector: draws the connected screens as
+    rectangles laid out by their real geometry (like Wallpaper Engine's screen
+    picker); click one to select it. Hover for each screen's resolution and
+    current assignment."""
+
+    selected = Signal(str)
+
+    def __init__(self):
+        super().__init__()
+        self._screens: list[tuple[str, QRect]] = []
+        self._assign: dict[str, str] = {}
+        self._current: str | None = None
+        self._rects: dict[str, QRectF] = {}
+        self.setMinimumSize(200, 76)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+    def set_screens(self, screens) -> None:
+        self._screens = [(s.name(), s.geometry()) for s in screens]
+        names = [n for n, _ in self._screens]
+        if self._current not in names:
+            self._current = names[0] if names else None
+        self._update_tooltip()
+        self.updateGeometry()
+        self.update()
+
+    def set_assignments(self, mapping: dict) -> None:
+        self._assign = dict(mapping)
+        self._update_tooltip()
+        self.update()
+
+    def current(self) -> str | None:
+        return self._current
+
+    def set_current(self, name: str) -> None:
+        if name != self._current and any(n == name for n, _ in self._screens):
+            self._current = name
+            self.update()
+
+    def sizeHint(self) -> QSize:
+        return QSize(max(200, 66 * max(1, len(self._screens))), 76)
+
+    def _update_tooltip(self) -> None:
+        lines = ["Cliquer un écran pour le sélectionner :"]
+        for name, g in self._screens:
+            a = self._assign.get(name, "")
+            lines.append(f"  {name} — {g.width()}×{g.height()}"
+                         + (f"  →  {a}" if a else ""))
+        self.setToolTip("\n".join(lines))
+
+    def _compute_rects(self) -> dict:
+        if not self._screens:
+            return {}
+        minx = min(g.x() for _, g in self._screens)
+        miny = min(g.y() for _, g in self._screens)
+        maxx = max(g.x() + g.width() for _, g in self._screens)
+        maxy = max(g.y() + g.height() for _, g in self._screens)
+        bw, bh = maxx - minx, maxy - miny
+        if bw <= 0 or bh <= 0:
+            return {}
+        area = QRectF(self.rect()).adjusted(3, 3, -3, -3)
+        scale = min(area.width() / bw, area.height() / bh)
+        offx = area.x() + (area.width() - bw * scale) / 2
+        offy = area.y() + (area.height() - bh * scale) / 2
+        return {name: QRectF(offx + (g.x() - minx) * scale,
+                             offy + (g.y() - miny) * scale,
+                             g.width() * scale, g.height() * scale)
+                for name, g in self._screens}
+
+    def paintEvent(self, event) -> None:
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        self._rects = self._compute_rects()
+        f = painter.font()
+        f.setPointSizeF(max(7.0, f.pointSizeF() * 0.82))
+        painter.setFont(f)
+        fm = QFontMetrics(f)
+        for name, g in self._screens:
+            r = self._rects.get(name)
+            if r is None:
+                continue
+            sel = name == self._current
+            painter.setPen(QPen(QColor(theme.ACCENT if sel else theme.BORDER_HI),
+                                2 if sel else 1))
+            painter.setBrush(QColor(theme.ACCENT_LO if sel else theme.SURFACE))
+            inner = r.adjusted(1.5, 1.5, -1.5, -1.5)
+            painter.drawRoundedRect(inner, 3, 3)
+            painter.setPen(QColor(theme.ON_ACCENT if sel else theme.TEXT))
+            painter.drawText(
+                inner, Qt.AlignmentFlag.AlignCenter,
+                fm.elidedText(name, Qt.TextElideMode.ElideRight,
+                              max(10, int(inner.width()) - 4)))
+
+    def mousePressEvent(self, event) -> None:
+        pos = event.position()
+        for name, r in self._rects.items():
+            if r.contains(pos):
+                if name != self._current:
+                    self._current = name
+                    self.update()
+                    self.selected.emit(name)
+                break
+
+
+# --------------------------------------------------------------------------- #
 # Main window
 # --------------------------------------------------------------------------- #
 class MainWindow(QMainWindow):
@@ -871,8 +978,7 @@ class MainWindow(QMainWindow):
         menu.addSeparator()
 
         names = self.controller.playlist_names()
-        for i in range(self.screen_combo.count()):
-            screen = self.screen_combo.itemData(i)
+        for screen in self._screen_names():
             sub = menu.addMenu(f"{screen} — {self.controller.describe(screen)}")
             group = QActionGroup(sub)
             group.setExclusive(True)
@@ -1232,11 +1338,11 @@ class MainWindow(QMainWindow):
         area = QVBoxLayout()
 
         bar = FlowLayout()
-        bar.addWidget(QLabel("Écran :"))
-        self.screen_combo = QComboBox()
+        bar.addWidget(QLabel("Écrans :"))
+        self.screen_picker = ScreenPicker()
+        self.screen_picker.selected.connect(lambda _n: self._on_screen_changed())
         self._populate_screens()
-        self.screen_combo.currentIndexChanged.connect(self._on_screen_changed)
-        bar.addWidget(self.screen_combo)
+        bar.addWidget(self.screen_picker)
 
         self.apply_single_btn = QPushButton("Fond sélectionné → écran")
         self.apply_single_btn.setProperty("accent", True)
@@ -1334,10 +1440,10 @@ class MainWindow(QMainWindow):
         return line
 
     def _populate_screens(self) -> None:
-        self.screen_combo.clear()
-        for screen in QGuiApplication.screens():
-            geo = screen.geometry()
-            self.screen_combo.addItem(f"{screen.name()}  ({geo.width()}×{geo.height()})", screen.name())
+        self.screen_picker.set_screens(QGuiApplication.screens())
+
+    def _screen_names(self) -> list[str]:
+        return [s.name() for s in QGuiApplication.screens()]
 
     # Library --------------------------------------------------------------- #
     def _reload_library(self) -> None:
@@ -1698,7 +1804,7 @@ class MainWindow(QMainWindow):
         return idxs[0].data(WALLPAPER_ROLE) if idxs else None
 
     def _current_screen(self) -> str | None:
-        return self.screen_combo.currentData()
+        return self.screen_picker.current()
 
     # Actions --------------------------------------------------------------- #
     def _apply_single(self) -> None:
@@ -1730,9 +1836,13 @@ class MainWindow(QMainWindow):
 
     def _refresh_status(self) -> None:
         parts = []
-        for i in range(self.screen_combo.count()):
-            name = self.screen_combo.itemData(i)
-            parts.append(f"{name} → {self.controller.describe(name)}")
+        assignments = {}
+        for name in self._screen_names():
+            desc = self.controller.describe(name)
+            assignments[name] = desc
+            parts.append(f"{name} → {desc}")
+        if hasattr(self, "screen_picker"):
+            self.screen_picker.set_assignments(assignments)
         running = "▶ en cours" if engine.is_running() else "■ arrêté"
         self.setWindowTitle(f"Wallpaper Engine Manager — {running}   [{'  |  '.join(parts)}]")
         if getattr(self, "_tray", None) is not None:
@@ -1777,7 +1887,7 @@ class MainWindow(QMainWindow):
             )
 
     # Options --------------------------------------------------------------- #
-    def _on_screen_changed(self, _i: int) -> None:
+    def _on_screen_changed(self, _i=None) -> None:
         # Keep the "compatible with screen" filter tied to the selected screen.
         if self.compat_check.isChecked():
             self.proxy.compat_ratio = self._screen_ratio()
