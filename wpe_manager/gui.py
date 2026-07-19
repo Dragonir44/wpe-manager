@@ -7,8 +7,12 @@ from pathlib import Path
 
 from PySide6.QtCore import (
     QAbstractListModel,
+    QEvent,
     QModelIndex,
     QObject,
+    QPointF,
+    QRect,
+    QRectF,
     QRunnable,
     QSize,
     QSortFilterProxyModel,
@@ -19,11 +23,16 @@ from PySide6.QtCore import (
 from PySide6.QtGui import (
     QAction,
     QActionGroup,
+    QBrush,
     QColor,
+    QFont,
+    QFontMetrics,
     QGuiApplication,
     QIcon,
     QImage,
     QPainter,
+    QPainterPath,
+    QPen,
     QPixmap,
 )
 from PySide6.QtWidgets import (
@@ -49,17 +58,20 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSpinBox,
+    QStyle,
+    QStyledItemDelegate,
     QSystemTrayIcon,
     QVBoxLayout,
     QWidget,
 )
 
-from . import config, engine, library, steam
+from . import config, engine, library, steam, theme
 from .library import AGE_LABELS, Wallpaper
 from .rotation import RotationController
 
 THUMB = QSize(240, 135)  # 16:9 thumbnails
 WALLPAPER_ROLE = Qt.ItemDataRole.UserRole + 1
+RESOLUTION_ROLE = Qt.ItemDataRole.UserRole + 2  # compact "W×H" for the card badge
 
 
 def app_icon() -> QIcon:
@@ -178,6 +190,9 @@ class WallpaperModel(QAbstractListModel):
             return "\n".join(lines)
         if role == WALLPAPER_ROLE:
             return wp
+        if role == RESOLUTION_ROLE:
+            res = self.resolutions_of(wp.id)
+            return res[0].replace(" ", "").replace("x", "×") if res else ""
         if role == Qt.ItemDataRole.CheckStateRole:
             return Qt.CheckState.Checked if wp.id in self._checked else Qt.CheckState.Unchecked
         if role == Qt.ItemDataRole.DecorationRole:
@@ -304,6 +319,157 @@ class WallpaperFilterProxy(QSortFilterProxyModel):
         # Title order == the source order (scan() already sorts by title), so a
         # -1 sort column restores it without our lessThan; size uses lessThan.
         self.sort(-1 if self.sort_mode == "title" else 0)
+
+
+# --------------------------------------------------------------------------- #
+# WPE-style card delegate
+# --------------------------------------------------------------------------- #
+class WallpaperCardDelegate(QStyledItemDelegate):
+    """Draws each grid item as a Wallpaper-Engine-style card: a near-square
+    thumbnail with the title on a strip below it, sharp corners, and a blue
+    border + blue title strip when selected. To stay as clean as WPE at rest,
+    the check badge and resolution tag are only shown on hover (the check badge
+    also stays visible when the wallpaper is checked)."""
+
+    CARD_W = 168
+    IMG_H = 122
+    STRIP_H = 24
+    _MARGIN = 5
+    _RADIUS = 3
+    _BADGE = 20              # check badge side (px)
+
+    def sizeHint(self, option, index) -> QSize:
+        return QSize(self.CARD_W + self._MARGIN * 2,
+                     self.IMG_H + self.STRIP_H + self._MARGIN * 2)
+
+    def _card_rect(self, opt_rect: QRect) -> QRect:
+        return QRect(opt_rect.x() + self._MARGIN, opt_rect.y() + self._MARGIN,
+                     self.CARD_W, self.IMG_H + self.STRIP_H)
+
+    def _img_rect(self, opt_rect: QRect) -> QRect:
+        c = self._card_rect(opt_rect)
+        return QRect(c.x(), c.y(), c.width(), self.IMG_H)
+
+    def _badge_rect(self, opt_rect: QRect) -> QRect:
+        img = self._img_rect(opt_rect)
+        return QRect(img.x() + 6, img.y() + 6, self._BADGE, self._BADGE)
+
+    def paint(self, painter, option, index) -> None:
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        card = QRectF(self._card_rect(option.rect))
+        img = QRectF(self._img_rect(option.rect))
+        selected = bool(option.state & QStyle.StateFlag.State_Selected)
+        hover = bool(option.state & QStyle.StateFlag.State_MouseOver)
+        checked = (index.data(Qt.ItemDataRole.CheckStateRole)
+                   == Qt.CheckState.Checked)
+        base_font = painter.font()
+
+        # rounded clip; fill so the strip area gets its background
+        path = QPainterPath()
+        path.addRoundedRect(card, self._RADIUS, self._RADIUS)
+        painter.setClipPath(path)
+        painter.fillRect(card, QColor(theme.STRIP_BG))
+
+        # thumbnail (cover-scaled, centre-cropped into the image area)
+        pm = index.data(Qt.ItemDataRole.DecorationRole)
+        if isinstance(pm, QPixmap) and not pm.isNull():
+            scaled = pm.scaled(img.size().toSize(),
+                               Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                               Qt.TransformationMode.SmoothTransformation)
+            px = img.x() + (img.width() - scaled.width()) / 2
+            py = img.y() + (img.height() - scaled.height()) / 2
+            painter.save()
+            painter.setClipRect(img)
+            painter.drawPixmap(int(px), int(py), scaled)
+            painter.restore()
+
+        if hover:
+            painter.fillRect(img, QColor(255, 255, 255, 18))
+
+        # title strip below the thumbnail
+        strip = QRectF(card.x(), img.bottom(), card.width(), self.STRIP_H)
+        painter.fillRect(strip, QColor(theme.ACCENT if selected else theme.STRIP_BG))
+        title = str(index.data(Qt.ItemDataRole.DisplayRole) or "")
+        title_font = QFont(base_font)
+        title_font.setPointSizeF(base_font.pointSizeF() * 0.92)
+        painter.setFont(title_font)
+        painter.setPen(QColor(theme.ON_ACCENT if selected else theme.TEXT))
+        tw = int(strip.width()) - 14
+        text = QFontMetrics(title_font).elidedText(
+            title, Qt.TextElideMode.ElideRight, tw)
+        painter.drawText(strip.adjusted(7, 0, -7, 0),
+                         Qt.AlignmentFlag.AlignCenter, text)
+
+        # resolution tag (top-right, on hover only)
+        res = index.data(RESOLUTION_ROLE)
+        if hover and res:
+            badge_font = QFont(base_font)
+            badge_font.setPointSizeF(max(7.0, base_font.pointSizeF() * 0.78))
+            painter.setFont(badge_font)
+            rfm = QFontMetrics(badge_font)
+            bw = rfm.horizontalAdvance(res) + 12
+            br = QRectF(img.right() - bw - 6, img.y() + 6, bw, 17)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor(0, 0, 0, 160))
+            painter.drawRoundedRect(br, 3, 3)
+            painter.setPen(QColor(theme.TEXT))
+            painter.drawText(br, Qt.AlignmentFlag.AlignCenter, res)
+
+        # check badge (top-left) — shown on hover, or always when checked
+        if hover or checked:
+            badge = QRectF(self._badge_rect(option.rect))
+            painter.setPen(Qt.PenStyle.NoPen)
+            if checked:
+                painter.setBrush(QColor(theme.ACCENT))
+                painter.drawRoundedRect(badge, 3, 3)
+                pen = QPen(QColor(theme.ON_ACCENT))
+                pen.setWidthF(2.0)
+                pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+                pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+                painter.setPen(pen)
+                x, y, w, h = badge.x(), badge.y(), badge.width(), badge.height()
+                painter.drawLine(QPointF(x + w * 0.26, y + h * 0.52),
+                                 QPointF(x + w * 0.44, y + h * 0.70))
+                painter.drawLine(QPointF(x + w * 0.44, y + h * 0.70),
+                                 QPointF(x + w * 0.76, y + h * 0.32))
+            else:
+                painter.setBrush(QColor(0, 0, 0, 120))
+                painter.drawRoundedRect(badge, 3, 3)
+                pen = QPen(QColor(255, 255, 255, 180))
+                pen.setWidthF(1.0)
+                painter.setPen(pen)
+                painter.setBrush(QBrush(Qt.BrushStyle.NoBrush))
+                painter.drawRoundedRect(badge.adjusted(0.5, 0.5, -0.5, -0.5), 3, 3)
+
+        painter.setClipping(False)
+
+        # selection border around the whole card
+        if selected:
+            pen = QPen(QColor(theme.ACCENT))
+            pen.setWidthF(2.0)
+            painter.setPen(pen)
+            painter.setBrush(QBrush(Qt.BrushStyle.NoBrush))
+            painter.drawRoundedRect(card.adjusted(1, 1, -1, -1),
+                                    self._RADIUS, self._RADIUS)
+
+        painter.restore()
+
+    def editorEvent(self, event, model, option, index) -> bool:
+        # Clicking the check badge toggles the wallpaper without disturbing the
+        # current selection; clicks elsewhere fall through to the view.
+        if (event.type() == QEvent.Type.MouseButtonRelease
+                and event.button() == Qt.MouseButton.LeftButton
+                and self._badge_rect(option.rect).contains(
+                    event.position().toPoint())):
+            checked = (index.data(Qt.ItemDataRole.CheckStateRole)
+                       == Qt.CheckState.Checked)
+            model.setData(
+                index,
+                Qt.CheckState.Unchecked if checked else Qt.CheckState.Checked,
+                Qt.ItemDataRole.CheckStateRole)
+            return True
+        return False
 
 
 # --------------------------------------------------------------------------- #
@@ -598,6 +764,7 @@ class MainWindow(QMainWindow):
 
     def _build_playlist_panel(self) -> QWidget:
         panel = QFrame()
+        panel.setObjectName("playlistPanel")
         panel.setFrameShape(QFrame.Shape.StyledPanel)
         panel.setFixedWidth(280)
         v = QVBoxLayout(panel)
@@ -613,6 +780,7 @@ class MainWindow(QMainWindow):
         v.addWidget(self.pl_list, 1)
 
         self.new_pl_btn = QPushButton("Nouvelle (depuis cochés)")
+        self.new_pl_btn.setProperty("accent", True)
         self.new_pl_btn.clicked.connect(self._create_playlist)
         v.addWidget(self.new_pl_btn)
 
@@ -627,6 +795,7 @@ class MainWindow(QMainWindow):
         v.addWidget(self.uncheck_btn)
 
         self.del_pl_btn = QPushButton("Supprimer")
+        self.del_pl_btn.setProperty("danger", True)
         self.del_pl_btn.clicked.connect(self._delete_playlist)
         v.addWidget(self.del_pl_btn)
 
@@ -668,6 +837,7 @@ class MainWindow(QMainWindow):
         bar.addWidget(self.screen_combo)
 
         self.apply_single_btn = QPushButton("Fond sélectionné → écran")
+        self.apply_single_btn.setProperty("accent", True)
         self.apply_single_btn.clicked.connect(self._apply_single)
         bar.addWidget(self.apply_single_btn)
 
@@ -682,6 +852,7 @@ class MainWindow(QMainWindow):
         self.apply_pl_combo = QComboBox()
         bar.addWidget(self.apply_pl_combo)
         self.apply_pl_btn = QPushButton("Playlist → écran")
+        self.apply_pl_btn.setProperty("accent", True)
         self.apply_pl_btn.clicked.connect(self._apply_playlist)
         bar.addWidget(self.apply_pl_btn)
 
@@ -778,14 +949,14 @@ class MainWindow(QMainWindow):
         area.addLayout(bar3)
 
         self.view = QListView()
+        self.view.setObjectName("grid")
         self.view.setViewMode(QListView.ViewMode.IconMode)
         self.view.setResizeMode(QListView.ResizeMode.Adjust)
         self.view.setMovement(QListView.Movement.Static)
         self.view.setUniformItemSizes(True)
-        self.view.setWordWrap(True)
-        self.view.setSpacing(8)
-        self.view.setIconSize(THUMB)
-        self.view.setGridSize(QSize(THUMB.width() + 24, THUMB.height() + 46))
+        self.view.setSpacing(6)
+        self.view.setMouseTracking(True)  # so the delegate gets hover state
+        self.view.setItemDelegate(WallpaperCardDelegate(self.view))
         self.view.doubleClicked.connect(lambda _idx: self._apply_single())
         area.addWidget(self.view, 1)
         return area

@@ -45,11 +45,13 @@ def main() -> int:
     from PySide6.QtNetwork import QLocalServer
     from PySide6.QtWidgets import QApplication
 
+    from . import theme
     from .gui import MainWindow, app_icon
 
     app = QApplication(sys.argv)
     app.setApplicationName("Wallpaper Engine Manager")
     app.setWindowIcon(app_icon())
+    theme.apply(app)  # fixed WPE-style dark theme
     # The tray keeps the app alive when the window is hidden/closed.
     app.setQuitOnLastWindowClosed(False)
 
