@@ -819,7 +819,7 @@ class ScreenPicker(QWidget):
         self._assign: dict[str, str] = {}
         self._current: str | None = None
         self._rects: dict[str, QRectF] = {}
-        self.setMinimumSize(200, 76)
+        self.setMinimumSize(150, 46)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
 
     def set_screens(self, screens) -> None:
@@ -845,7 +845,7 @@ class ScreenPicker(QWidget):
             self.update()
 
     def sizeHint(self) -> QSize:
-        return QSize(max(200, 66 * max(1, len(self._screens))), 76)
+        return QSize(max(160, 58 * max(1, len(self._screens))), 46)
 
     def _update_tooltip(self) -> None:
         lines = ["Cliquer un écran pour le sélectionner :"]
@@ -1386,6 +1386,12 @@ class MainWindow(QMainWindow):
         paths_btn.clicked.connect(self._edit_paths)
         form.addRow(paths_btn)
 
+        self.stop_btn = QPushButton("Tout arrêter")
+        self.stop_btn.setProperty("danger", True)
+        self.stop_btn.setToolTip("Arrête tous les fonds sur tous les écrans.")
+        self.stop_btn.clicked.connect(self.controller.stop_all)
+        form.addRow(self.stop_btn)
+
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         buttons.rejected.connect(dlg.hide)
         form.addRow(buttons)
@@ -1421,9 +1427,6 @@ class MainWindow(QMainWindow):
         self.clear_btn = QPushButton("Vider l'écran")
         self.clear_btn.clicked.connect(self._clear_selected)
         bar.addWidget(self.clear_btn)
-        self.stop_btn = QPushButton("Tout arrêter")
-        self.stop_btn.clicked.connect(self.controller.stop_all)
-        bar.addWidget(self.stop_btn)
         self.settings_btn = QPushButton("⚙ Réglages")
         self.settings_btn.setToolTip("Audio, FPS, transition, autostart, chemins…")
         self.settings_btn.clicked.connect(self._open_settings)
@@ -1936,6 +1939,9 @@ class MainWindow(QMainWindow):
                 self.model.set_checked(
                     self.controller.playlists[name].get("ids", []))
                 return
+        # No active playlist on this screen: empty the working selection (WPE),
+        # and select its single wallpaper in the grid if it has one.
+        self.model.clear_checks()
         wid = self.controller.current_id(screen)
         if not wid:
             return
