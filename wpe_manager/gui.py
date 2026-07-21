@@ -53,6 +53,8 @@ from PySide6.QtWidgets import (
     QLayout,
     QLineEdit,
     QListView,
+    QListWidget,
+    QListWidgetItem,
     QMainWindow,
     QMenu,
     QMessageBox,
@@ -67,7 +69,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from . import config, engine, library, steam, theme
+from . import autopause, config, engine, library, steam, theme
+from .autopause import AutoPauseWatcher
 from .library import AGE_LABELS, Wallpaper
 from .rotation import RotationController
 
@@ -964,6 +967,8 @@ class MainWindow(QMainWindow):
         self.cfg = cfg
         self.controller = RotationController(cfg)
         self.controller.changed.connect(self._refresh_status)
+        # Watches running processes and pauses/resumes wallpapers on game launch.
+        self.autopause = AutoPauseWatcher(cfg, self.controller, self)
         self._loading_pl = False  # guard against edit feedback loops
         self._really_quitting = False
         self._tray_notified = False
@@ -982,6 +987,7 @@ class MainWindow(QMainWindow):
         self._reload_library()
         self._refresh_playlists()
         self._refresh_status()
+        self.autopause.start()
         self._on_screen_changed()  # load the active screen's playlist at startup
 
     # System tray ---------------------------------------------------------- #
@@ -1437,6 +1443,8 @@ class MainWindow(QMainWindow):
         self.launcher_check.toggled.connect(self._set_launcher)
         form.addRow(self.launcher_check)
 
+        self._build_pause_apps_section(form)
+
         paths_btn = QPushButton("Chemins de la bibliothèque…")
         paths_btn.clicked.connect(self._edit_paths)
         form.addRow(paths_btn)
@@ -1456,6 +1464,132 @@ class MainWindow(QMainWindow):
         self._settings_dialog.show()
         self._settings_dialog.raise_()
         self._settings_dialog.activateWindow()
+
+    # -- auto-pause settings ----------------------------------------------- #
+    def _build_pause_apps_section(self, form: QFormLayout) -> None:
+        """Manage the list of apps that pause the wallpapers while they run."""
+        hint = QLabel(
+            "Ces apps mettent les fonds en pause tant qu'elles tournent "
+            "(GPU libéré), puis les relancent à leur fermeture — utile en jeu "
+            "ou en stream, même en fenêtré sans bordure.")
+        hint.setWordWrap(True)
+        hint.setObjectName("muted")
+        form.addRow(hint)
+
+        self.pause_apps_list = QListWidget()
+        self.pause_apps_list.setMaximumHeight(120)
+        self.pause_apps_list.setSelectionMode(
+            QListWidget.SelectionMode.ExtendedSelection)
+        self._refresh_pause_apps_list()
+        form.addRow("Pause auto :", self.pause_apps_list)
+
+        row = QHBoxLayout()
+        add_btn = QPushButton("Ajouter depuis les apps en cours…")
+        add_btn.clicked.connect(self._add_pause_apps_from_running)
+        rm_btn = QPushButton("Retirer")
+        rm_btn.clicked.connect(self._remove_selected_pause_apps)
+        row.addWidget(add_btn)
+        row.addWidget(rm_btn)
+        holder = QWidget()
+        holder.setLayout(row)
+        form.addRow(holder)
+
+        # -- GPU-load fallback -- #
+        gpu_available = autopause.gpu_busy_percent() is not None
+        self.gpu_pause_check = QCheckBox("Pause auto si le GPU sature")
+        self.gpu_pause_check.setToolTip(
+            "Filet de sécurité pour les apps hors liste : met les fonds en pause "
+            "quand l'utilisation GPU reste élevée un moment, puis les relance "
+            "quand elle retombe.")
+        self.gpu_pause_check.setChecked(self.cfg.gpu_pause_enabled and gpu_available)
+        self.gpu_pause_check.setEnabled(gpu_available)
+        self.gpu_pause_check.toggled.connect(self._on_gpu_pause_toggled)
+        form.addRow(self.gpu_pause_check)
+
+        self.gpu_thresh_spin = QSpinBox()
+        self.gpu_thresh_spin.setRange(50, 100)
+        self.gpu_thresh_spin.setSuffix(" %")
+        self.gpu_thresh_spin.setSingleStep(5)
+        self.gpu_thresh_spin.setValue(self.cfg.gpu_pause_threshold)
+        self.gpu_thresh_spin.setToolTip(
+            "Utilisation GPU au-delà de laquelle les fonds se coupent. La reprise "
+            "se fait à un seuil plus bas pour éviter les allers-retours.")
+        self.gpu_thresh_spin.setEnabled(gpu_available and self.cfg.gpu_pause_enabled)
+        self.gpu_thresh_spin.valueChanged.connect(self._on_gpu_thresh_changed)
+        form.addRow("Seuil GPU :", self.gpu_thresh_spin)
+        if not gpu_available:
+            note = QLabel("(capteur GPU indisponible sur ce système)")
+            note.setObjectName("muted")
+            form.addRow(note)
+
+    def _refresh_pause_apps_list(self) -> None:
+        self.pause_apps_list.clear()
+        for name in self.cfg.pause_apps:
+            self.pause_apps_list.addItem(QListWidgetItem(name))
+
+    def _save_pause_apps(self) -> None:
+        config.save_config(self.cfg)  # watcher reads cfg.pause_apps live
+
+    def _on_gpu_pause_toggled(self, on: bool) -> None:
+        self.cfg.gpu_pause_enabled = bool(on)
+        self.gpu_thresh_spin.setEnabled(bool(on))
+        config.save_config(self.cfg)
+
+    def _on_gpu_thresh_changed(self, value: int) -> None:
+        self.cfg.gpu_pause_threshold = int(value)
+        config.save_config(self.cfg)
+
+    def _remove_selected_pause_apps(self) -> None:
+        selected = {i.text() for i in self.pause_apps_list.selectedItems()}
+        if not selected:
+            return
+        self.cfg.pause_apps = [a for a in self.cfg.pause_apps if a not in selected]
+        self._save_pause_apps()
+        self._refresh_pause_apps_list()
+
+    def _add_pause_apps_from_running(self) -> None:
+        """Pick from the apps currently running rather than typing names."""
+        dlg = QDialog(self._settings_dialog)
+        dlg.setWindowTitle("Apps en cours")
+        layout = QVBoxLayout(dlg)
+
+        search = QLineEdit()
+        search.setPlaceholderText("Filtrer…")
+        layout.addWidget(search)
+
+        listw = QListWidget()
+        listw.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
+        layout.addWidget(listw)
+
+        already = {a.casefold() for a in self.cfg.pause_apps}
+        names = [n for n in autopause.running_app_names() if n.casefold() not in already]
+        for name in names:
+            listw.addItem(QListWidgetItem(name))
+
+        def _filter(text: str) -> None:
+            t = text.casefold()
+            for i in range(listw.count()):
+                item = listw.item(i)
+                item.setHidden(t not in item.text().casefold())
+        search.textChanged.connect(_filter)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(dlg.accept)
+        buttons.rejected.connect(dlg.reject)
+        layout.addWidget(buttons)
+        dlg.resize(360, 420)
+
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        picked = [i.text() for i in listw.selectedItems()]
+        if not picked:
+            return
+        for name in picked:
+            if name not in self.cfg.pause_apps:
+                self.cfg.pause_apps.append(name)
+        self._save_pause_apps()
+        self._refresh_pause_apps_list()
 
     # -- screen picker popup (WPE-style) ----------------------------------- #
     def _build_screen_dialog(self) -> None:
@@ -2046,7 +2180,12 @@ class MainWindow(QMainWindow):
         if hasattr(self, "screen_picker"):
             self.screen_picker.set_assignments(assignments)
         self._update_screen_dialog_label()
-        running = "▶ en cours" if engine.is_running() else "■ arrêté"
+        if self.controller.is_paused():
+            running = "⏸ en pause (app active)"
+        elif engine.is_running():
+            running = "▶ en cours"
+        else:
+            running = "■ arrêté"
         self.setWindowTitle(f"Wallpaper Engine Manager — {running}   [{'  |  '.join(parts)}]")
         if getattr(self, "_tray", None) is not None:
             self._tray.setToolTip(

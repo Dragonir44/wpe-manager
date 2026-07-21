@@ -114,6 +114,15 @@ class Config:
     # started and left to render for this long before the old is killed, so
     # there's no black gap. 0 disables the overlap.
     overlap_ms: int = 1200
+    # Executable names that, while running, pause every wallpaper (freeing the
+    # GPU) and resume them on exit. Matched against each process's `comm` and
+    # executable basename. Empty = auto-pause disabled.
+    pause_apps: list[str] = field(default_factory=list)
+    # Fallback auto-pause on sustained high GPU usage (for apps not in the list
+    # above). Off by default. threshold is the GPU-busy % that triggers a pause;
+    # resume uses a lower threshold (hysteresis) once load drops.
+    gpu_pause_enabled: bool = False
+    gpu_pause_threshold: int = 90
 
     @property
     def library_path(self) -> Path | None:

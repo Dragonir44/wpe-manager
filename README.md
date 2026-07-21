@@ -52,8 +52,18 @@ Testé sur KDE Plasma 6 / Wayland (CachyOS), mais ne dépend d'aucune API KDE.
 - **Démarrage avec la session** : une case (dans *⚙ Réglages* ou le menu tray)
   installe un lanceur autostart qui relance l'app dans le tray et **restaure les
   fonds (rotation comprise)** à l'ouverture de session.
-- **⚙ Réglages** : audio (muet), FPS, durée de transition globale, chemins de la
-  bibliothèque, autostart, entrée du menu applications.
+- **Pause automatique** : les fonds étant des rendus GPU continus, ils volent des
+  FPS à un jeu — surtout en multi-écran (les autres moniteurs continuent de
+  rendre) ou en *fenêtré sans bordure*. Deux déclencheurs, dans *⚙ Réglages* :
+  - **liste d'apps** — tant qu'une app de la liste tourne, **tous** les fonds
+    sont coupés (GPU libéré), puis relancés à sa fermeture ; ajout en un clic
+    depuis les apps en cours. Marche quel que soit le GPU et même en borderless.
+  - **charge GPU** (option, filet de secours pour les apps hors liste) — coupe
+    les fonds quand l'utilisation GPU reste au-dessus d'un seuil, avec
+    hystérésis pour éviter les allers-retours. Lecture via sysfs **amdgpu** ou
+    **`nvidia-smi`** (grisé sur les GPU non supportés).
+- **⚙ Réglages** : audio (muet), FPS, durée de transition globale, pause
+  automatique, chemins de la bibliothèque, autostart, entrée du menu applications.
 
 ## Prérequis
 

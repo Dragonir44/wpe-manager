@@ -34,6 +34,7 @@ class RotationController(QObject):
         self.playlists: dict[str, dict] = {p["name"]: p for p in config.load_playlists()}
         self._pos: dict[str, int] = {}          # screen -> index into playlist ids
         self._next_due: dict[str, float] = {}    # screen -> monotonic deadline
+        self._paused = False                      # auto-pause: wallpapers stopped, assignments kept
         self._timer = QTimer(self)
         self._timer.setInterval(_TICK_MS)
         self._timer.timeout.connect(self._tick)
@@ -101,6 +102,7 @@ class RotationController(QObject):
         self.apply()
 
     def stop_all(self) -> None:
+        self._paused = False
         self.assignments.clear()
         self._pos.clear()
         self._next_due.clear()
@@ -108,6 +110,29 @@ class RotationController(QObject):
         engine.stop()
         config.save_assignments({})
         self.changed.emit()
+
+    # -- auto-pause (driven by autopause.AutoPauseWatcher) ----------------- #
+    def is_paused(self) -> bool:
+        return self._paused
+
+    def pause(self) -> None:
+        """Stop every wallpaper process to free the GPU, keeping the desired
+        assignments intact so resume() can restore them. Used while a game or
+        other heavy app runs; unlike stop_all() this is meant to be temporary."""
+        if self._paused:
+            return
+        self._paused = True
+        self._timer.stop()
+        engine.stop()
+        self.changed.emit()
+
+    def resume(self) -> None:
+        """Relaunch the wallpapers that pause() stopped, from the (retained)
+        assignments — including any edits made while paused."""
+        if not self._paused:
+            return
+        self._paused = False
+        self.apply()
 
     # -- describe current state (for the UI) ------------------------------- #
     def describe(self, screen: str) -> str:
@@ -182,6 +207,12 @@ class RotationController(QObject):
         for screen, a in self.assignments.items():
             if a.get("mode") == "playlist" and screen not in self._pos:
                 self._pos[screen] = self._start_pos(a.get("playlist", ""))
+        # While auto-paused, persist assignment edits but launch nothing and
+        # keep the rotation timer stopped — resume() will bring them on screen.
+        if self._paused:
+            config.save_assignments(self.assignments)
+            self.changed.emit()
+            return
         concrete = self._concrete()
         # Stop screens that are no longer assigned.
         for screen in list(engine.snapshot()):

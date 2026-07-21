@@ -90,6 +90,7 @@ QFrame#playlistBar {{
 }}
 QLabel#plHead {{ font-weight: 600; }}
 QLabel#plCount {{ color: {MUTED}; }}
+QLabel#muted {{ color: {MUTED}; }}
 QScrollArea#checksStrip {{
     background: {GRID_BG}; border: 1px solid {BORDER}; border-radius: 6px;
 }}
