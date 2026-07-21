@@ -19,6 +19,7 @@ from PySide6.QtCore import (
     QSortFilterProxyModel,
     Qt,
     QThreadPool,
+    QTimer,
     Signal,
 )
 from PySide6.QtGui import (
@@ -60,6 +61,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QScrollArea,
+    QSlider,
     QSpinBox,
     QSplitter,
     QStyle,
@@ -1209,6 +1211,8 @@ class MainWindow(QMainWindow):
         self.pp_meta.setAlignment(Qt.AlignmentFlag.AlignCenter)
         v.addWidget(self.pp_meta)
 
+        v.addWidget(self._build_render_box())
+
         v.addWidget(self._hline())
         hdr = QLabel("Propriétés")
         hdr.setObjectName("ppSection")
@@ -1233,6 +1237,104 @@ class MainWindow(QMainWindow):
         self._pp_form: PropertyForm | None = None
         self._update_props_panel(None)
         return panel
+
+    _RENDER_LABELS = {
+        "parallax": "Désactiver le parallaxe",
+        "particles": "Désactiver les particules",
+        "mouse": "Désactiver l'interaction souris",
+    }
+    _SCALING_LABELS = {
+        "default": "Par défaut",
+        "fill": "Remplir (fill)",
+        "fit": "Ajuster (fit)",
+        "stretch": "Étirer (stretch)",
+    }
+
+    def _build_render_box(self) -> QWidget:
+        """The per-wallpaper 'Rendu' section of the properties panel.
+
+        Holds the backend display options we surface per wallpaper: a scaling
+        mode (any type) and the disable-toggles (scene wallpapers only, where
+        --disable-parallax/particles/mouse have an effect). Every change applies
+        immediately, live-reloading the wallpaper if it's currently displayed.
+        """
+        box = QFrame()
+        box.setObjectName("ppRenderBox")
+        lay = QVBoxLayout(box)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.addWidget(self._hline())
+        hdr = QLabel("Rendu")
+        hdr.setObjectName("ppSection")
+        lay.addWidget(hdr)
+
+        # Scaling — meaningful for every wallpaper type.
+        scale_row = QHBoxLayout()
+        scale_row.addWidget(QLabel("Cadrage :"))
+        self.pp_scaling = QComboBox()
+        for mode in config.SCALING_MODES:
+            self.pp_scaling.addItem(self._SCALING_LABELS[mode], mode)
+        self.pp_scaling.currentIndexChanged.connect(self._on_wp_opts_changed)
+        scale_row.addWidget(self.pp_scaling, 1)
+        lay.addLayout(scale_row)
+
+        # Disable-toggles — grouped so they can hide for non-scene wallpapers.
+        self._render_toggle_box = QFrame()
+        tlay = QVBoxLayout(self._render_toggle_box)
+        tlay.setContentsMargins(0, 0, 0, 0)
+        self._render_boxes: dict[str, QCheckBox] = {}
+        for feature in config.RENDER_FEATURES:
+            cb = QCheckBox(self._RENDER_LABELS[feature])
+            cb.toggled.connect(self._on_wp_opts_changed)
+            tlay.addWidget(cb)
+            self._render_boxes[feature] = cb
+        lay.addWidget(self._render_toggle_box)
+
+        self.pp_render_box = box
+        return box
+
+    def _load_render_box(self, wp: Wallpaper | None) -> None:
+        """Reflect a wallpaper's saved display options into the 'Rendu' widgets.
+
+        Hides the whole section when nothing is selected; hides just the
+        disable-toggles for non-scene wallpapers (they'd have no effect)."""
+        self.pp_render_box.setVisible(wp is not None)
+        if wp is None:
+            return
+        opts = config.load_render().get(wp.id, {})
+
+        mode = opts.get("scaling") or "default"
+        idx = self.pp_scaling.findData(mode)
+        self.pp_scaling.blockSignals(True)     # setCurrentIndex must not fire the handler
+        self.pp_scaling.setCurrentIndex(idx if idx >= 0 else 0)
+        self.pp_scaling.blockSignals(False)
+
+        is_scene = wp.type == "scene"
+        self._render_toggle_box.setVisible(is_scene)
+        disabled = set(opts.get("disabled", []))
+        for feature, cb in self._render_boxes.items():
+            cb.blockSignals(True)
+            cb.setChecked(is_scene and feature in disabled)
+            cb.blockSignals(False)
+
+    def _on_wp_opts_changed(self) -> None:
+        """Persist the 'Rendu' widgets for the selected wallpaper and reapply."""
+        wp = self._pp_wp
+        if wp is None:
+            return
+        entry: dict = {}
+        disabled = [f for f, cb in self._render_boxes.items() if cb.isChecked()]
+        if disabled:
+            entry["disabled"] = disabled
+        mode = self.pp_scaling.currentData()
+        if mode and mode != "default":
+            entry["scaling"] = mode
+        all_render = config.load_render()
+        if entry:
+            all_render[wp.id] = entry
+        else:
+            all_render.pop(wp.id, None)
+        config.save_render(all_render)
+        self.controller.refresh_wallpaper(wp.id)  # live if currently displayed
 
     def _set_props_placeholder(self, text: str) -> None:
         lbl = QLabel(text)
@@ -1259,6 +1361,7 @@ class MainWindow(QMainWindow):
     def _update_props_panel(self, wp: Wallpaper | None) -> None:
         self._pp_wp = wp
         self._pp_form = None
+        self._load_render_box(wp)
         if wp is None:
             self._pp_preview_pm = QPixmap()
             self.pp_preview.setPixmap(QPixmap())
@@ -1406,11 +1509,24 @@ class MainWindow(QMainWindow):
         dlg.setModal(False)
         form = QFormLayout(dlg)
 
-        self.silent_combo = QComboBox()
-        self.silent_combo.addItems(["🔊 Son", "🔇 Muet"])
-        self.silent_combo.setCurrentIndex(1 if self.cfg.silent else 0)
-        self.silent_combo.currentIndexChanged.connect(self._on_silent_changed)
-        form.addRow("Audio :", self.silent_combo)
+        # Applying volume relaunches every wallpaper, so coalesce rapid slider
+        # changes into a single reapply shortly after the user stops.
+        self._volume_apply_timer = QTimer(self)
+        self._volume_apply_timer.setSingleShot(True)
+        self._volume_apply_timer.setInterval(400)
+        self._volume_apply_timer.timeout.connect(self.controller.apply)
+        vol_row = QHBoxLayout()
+        self.volume_slider = QSlider(Qt.Orientation.Horizontal)
+        self.volume_slider.setRange(0, 100)
+        self.volume_slider.setValue(self.cfg.volume)
+        self.volume_slider.setToolTip("0 = muet ; défaut du backend : 15.")
+        self.volume_slider.valueChanged.connect(self._on_volume_changed)
+        self.volume_label = QLabel()
+        self.volume_label.setMinimumWidth(64)
+        vol_row.addWidget(self.volume_slider, 1)
+        vol_row.addWidget(self.volume_label)
+        self._update_volume_label(self.cfg.volume)
+        form.addRow("Volume :", vol_row)
 
         self.fps_spin = QSpinBox()
         self.fps_spin.setRange(5, 240)
@@ -1622,6 +1738,12 @@ class MainWindow(QMainWindow):
         row.addWidget(self.clear_btn)
         v.addLayout(row)
 
+        self.span_btn = QPushButton("🖼 Étaler le fond sur plusieurs écrans…")
+        self.span_btn.setToolTip(
+            "Étire le fond sélectionné sur plusieurs écrans (un seul rendu).")
+        self.span_btn.clicked.connect(self._open_span_dialog)
+        v.addWidget(self.span_btn)
+
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         buttons.rejected.connect(dlg.hide)
         v.addWidget(buttons)
@@ -1640,7 +1762,7 @@ class MainWindow(QMainWindow):
         screen = self._current_screen()
         self.screen_assign_label.setText(
             "—" if screen is None
-            else f"Écran {screen} → {self.controller.describe(screen)}")
+            else f"Écran {screen} → {self.controller.describe_for_screen(screen)}")
 
     def _build_main_area(self) -> QVBoxLayout:
         area = QVBoxLayout()
@@ -2170,11 +2292,48 @@ class MainWindow(QMainWindow):
             self.controller.clear(screen)
             self.status.showMessage(f"Écran {screen} vidé.", 4000)
 
+    def _open_span_dialog(self) -> None:
+        wp = self._selected_wallpaper()
+        if wp is None:
+            self.status.showMessage("Sélectionne d'abord un fond (clic simple).", 4000)
+            return
+        screens = self._screen_names()
+        if len(screens) < 2:
+            self.status.showMessage(
+                "Il faut au moins deux écrans pour étaler un fond.", 4000)
+            return
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Étaler sur plusieurs écrans")
+        lay = QVBoxLayout(dlg)
+        lay.addWidget(QLabel(
+            f"Étaler « {wp.title} » sur les écrans cochés\n(un seul rendu partagé) :"))
+        boxes: list[QCheckBox] = []
+        current = self._current_screen()
+        for name in screens:
+            cb = QCheckBox(name)
+            cb.setChecked(name == current)  # pre-check the active screen
+            lay.addWidget(cb)
+            boxes.append(cb)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(dlg.accept)
+        buttons.rejected.connect(dlg.reject)
+        lay.addWidget(buttons)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        chosen = [cb.text() for cb in boxes if cb.isChecked()]
+        if len(chosen) < 2:
+            self.status.showMessage("Coche au moins deux écrans à étaler.", 4000)
+            return
+        self.controller.assign_span(chosen, wp.id)
+        self.status.showMessage(
+            f"« {wp.title} » étalé sur {', '.join(chosen)}.", 5000)
+
     def _refresh_status(self) -> None:
         parts = []
         assignments = {}
         for name in self._screen_names():
-            desc = self.controller.describe(name)
+            desc = self.controller.describe_for_screen(name)
             assignments[name] = desc
             parts.append(f"{name} → {desc}")
         if hasattr(self, "screen_picker"):
@@ -2272,10 +2431,14 @@ class MainWindow(QMainWindow):
         self.proxy.invalidate()
         self._update_count()
 
-    def _on_silent_changed(self, index: int) -> None:
-        self.cfg.silent = index == 1
+    def _update_volume_label(self, value: int) -> None:
+        self.volume_label.setText("🔇 Muet" if value <= 0 else f"🔊 {value} %")
+
+    def _on_volume_changed(self, value: int) -> None:
+        self.cfg.volume = value
+        self._update_volume_label(value)
         config.save_config(self.cfg)
-        self.controller.apply()
+        self._volume_apply_timer.start()  # debounced reapply (see settings dialog)
 
     def _on_fps_changed(self, value: int) -> None:
         self.cfg.fps = value

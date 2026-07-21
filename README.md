@@ -32,6 +32,10 @@ Testé sur KDE Plasma 6 / Wayland (CachyOS), mais ne dépend d'aucune API KDE.
   selon leur disposition réelle ; on clique un écran puis on lui assigne un
   **fond fixe** ou la **playlist courante**. Sélectionner un écran recharge ce
   qu'il affiche.
+- **Fond étalé sur plusieurs écrans** (*Écrans… → Étaler…*) : étire **un seul
+  fond** sur plusieurs moniteurs (façon panorama ultrawide) avec **un seul
+  rendu partagé** (`--screen-span`). Ré-assigner ou vider un écran du groupe
+  défait proprement l'étalement.
 - **Playlists** créées par **cases à cocher** dans la grille, avec une **bande
   de vignettes** en bas (clic = aperçu, × au survol = retirer). **Intervalle**
   et **ordre** (séquentiel / aléatoire) en ligne ; bouton *Configurer…* pour les
@@ -41,6 +45,12 @@ Testé sur KDE Plasma 6 / Wayland (CachyOS), mais ne dépend d'aucune API KDE.
 - **Panneau de propriétés** (à droite) : personnalise le fond sélectionné
   (couleurs, curseurs, cases, listes). Enregistré par fond et réappliqué à chaque
   lancement via `--set-property` ; si le fond est affiché, il se recharge aussitôt.
+- **Réglages de rendu par fond** (section *Rendu* du panneau) : choisis le
+  **cadrage** (`remplir` / `ajuster` / `étirer` / défaut — utile en multi-écran
+  ou ratio non standard) et, sur les fonds *scène*, désactive individuellement le
+  **parallaxe**, les **particules** ou l'**interaction souris** — quand un effet
+  passe mal sur un fond précis ou pour alléger le GPU. Enregistré par fond
+  (`--scaling`, `--disable-parallax/particles/mouse`) et appliqué à chaud.
 - **Import depuis Wallpaper Engine** : récupère les playlists du `config.json`
   de WPE (extrait les IDs, ignore les chemins/moniteurs Windows non portables).
 - **Transition sans coupure** : le nouveau fond est affiché *par-dessus* l'ancien
@@ -65,8 +75,9 @@ Testé sur KDE Plasma 6 / Wayland (CachyOS), mais ne dépend d'aucune API KDE.
     hybride**, la dGPU NVIDIA est privilégiée : le fond tourne sur l'iGPU et les
     jeux s'offloadent sur la dGPU, donc sa charge est un signal propre sans la
     charge du fond lui-même.
-- **⚙ Réglages** : audio (muet), FPS, durée de transition globale, pause
-  automatique, chemins de la bibliothèque, autostart, entrée du menu applications.
+- **⚙ Réglages** : **volume** (0-100, 0 = muet), FPS, durée de transition
+  globale, pause automatique, chemins de la bibliothèque, autostart, entrée du
+  menu applications.
 
 ## Prérequis
 

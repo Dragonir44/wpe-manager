@@ -29,6 +29,16 @@ ENGINE_FILE = CONFIG_DIR / "engine.json"
 METADATA_FILE = CONFIG_DIR / "metadata.json"
 # Per-wallpaper property overrides: {wallpaper_id: {property_key: value}}.
 PROPERTIES_FILE = CONFIG_DIR / "properties.json"
+# Per-wallpaper render toggles: {wallpaper_id: [disabled feature, ...]}. A
+# feature absent from the list is enabled (the backend default); listing it
+# disables it via the matching --disable-* backend flag. See RENDER_FEATURES.
+RENDER_FILE = CONFIG_DIR / "render.json"
+# Render features that can be toggled off per wallpaper (scene wallpapers only).
+# Each maps to a `--disable-<name>` backend flag.
+RENDER_FEATURES = ("parallax", "particles", "mouse")
+# Scaling modes accepted by the backend's --scaling flag. "default" means "don't
+# pass the flag" (let the backend decide). Applies to any wallpaper type.
+SCALING_MODES = ("default", "fill", "fit", "stretch")
 
 # Steam roots we know how to look inside, in rough order of likelihood.
 _STEAM_ROOTS = [
@@ -108,7 +118,11 @@ def detect_assets_dir(library_dir: Path | None) -> Path | None:
 class Config:
     library_dir: str = ""
     assets_dir: str = ""
+    # Audio volume 0-100 (0 = muted, --silent). Kept as a level rather than a
+    # bool so the backend's --volume can be used. `silent` remains only to
+    # migrate old configs (see load_config).
     silent: bool = False
+    volume: int = 15
     fps: int = 30
     # Overlap window (ms) when swapping a screen's wallpaper: the new one is
     # started and left to render for this long before the old is killed, so
@@ -145,6 +159,12 @@ def load_config() -> Config:
         except (OSError, json.JSONDecodeError):
             data = {}
     cfg = Config(**{k: v for k, v in data.items() if k in Config.__dataclass_fields__})
+
+    # Migrate the old boolean mute to the volume level: a config that predates
+    # `volume` but had silent=true becomes volume 0 (muted).
+    if data.get("silent") and "volume" not in data:
+        cfg.volume = 0
+    cfg.volume = max(0, min(100, cfg.volume))
 
     if not cfg.library_dir:
         detected = detect_library_dir()
@@ -256,6 +276,48 @@ def load_properties() -> dict[str, dict]:
 def save_properties(data: dict[str, dict]) -> None:
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     PROPERTIES_FILE.write_text(json.dumps(data, indent=2))
+
+
+# --------------------------------------------------------------------------- #
+# Per-wallpaper render toggles (parallax / particles / mouse)
+# --------------------------------------------------------------------------- #
+def load_render() -> dict[str, dict]:
+    """Per-wallpaper display options: {wallpaper_id: {...}}.
+
+    Each entry may hold ``"disabled"`` (a list of turned-off render features)
+    and ``"scaling"`` (a non-default scaling mode). The 0.8.0 format stored the
+    value as a bare list of disabled features; it's migrated transparently.
+    Empty entries are dropped so absent == all-defaults.
+    """
+    if not RENDER_FILE.is_file():
+        return {}
+    try:
+        data = json.loads(RENDER_FILE.read_text())
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    out: dict[str, dict] = {}
+    for k, v in data.items():
+        if isinstance(v, list):          # legacy 0.8.0: bare disabled-features list
+            v = {"disabled": v}
+        if not isinstance(v, dict):
+            continue
+        entry: dict = {}
+        disabled = [f for f in v.get("disabled", []) if f in RENDER_FEATURES]
+        if disabled:
+            entry["disabled"] = disabled
+        scaling = v.get("scaling")
+        if scaling in SCALING_MODES and scaling != "default":
+            entry["scaling"] = scaling
+        if entry:
+            out[str(k)] = entry
+    return out
+
+
+def save_render(data: dict[str, dict]) -> None:
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    RENDER_FILE.write_text(json.dumps(data, indent=2))
 
 
 _WPE_ID_RE = re.compile(r"/431960/(\d+)/")

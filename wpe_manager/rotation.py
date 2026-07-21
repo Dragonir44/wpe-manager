@@ -60,15 +60,43 @@ class RotationController(QObject):
         self.apply()
 
     # -- assignment -------------------------------------------------------- #
+    # An assignment key is normally a single screen name. A *span* key is a
+    # comma-joined, sorted list of screen names ("DP-1,HDMI-1"): one wallpaper
+    # stretched across those screens (engine emits --screen-span for it). Every
+    # part of the codebase treats keys opaquely; only build_command and the
+    # overlap cleanup below care about the comma.
+    @staticmethod
+    def _screens_of(key: str) -> set[str]:
+        return set(key.split(","))
+
+    def _remove_screens(self, screens) -> None:
+        """Drop every assignment that covers any of `screens` (so a new one can
+        claim them without a screen ending up rendered twice)."""
+        targets = set(screens)
+        for key in list(self.assignments):
+            if self._screens_of(key) & targets:
+                self.assignments.pop(key, None)
+                self._pos.pop(key, None)
+                self._next_due.pop(key, None)
+
     def assign_single(self, screen: str, wid: str) -> None:
+        self._remove_screens([screen])  # also breaks a span this screen was in
         self.assignments[screen] = {"mode": "single", "id": wid}
-        self._pos.pop(screen, None)
-        self._next_due.pop(screen, None)
+        self.apply()
+
+    def assign_span(self, screens: list[str], wid: str) -> None:
+        """Stretch a single wallpaper across several screens (--screen-span)."""
+        uniq = sorted(set(screens))
+        if len(uniq) < 2:
+            return
+        self._remove_screens(uniq)
+        self.assignments[",".join(uniq)] = {"mode": "single", "id": wid}
         self.apply()
 
     def assign_playlist(self, screen: str, name: str) -> None:
         if name not in self.playlists:
             return
+        self._remove_screens([screen])
         self.assignments[screen] = {"mode": "playlist", "playlist": name}
         self._pos[screen] = self._start_pos(name)
         self.apply()
@@ -96,9 +124,8 @@ class RotationController(QObject):
         return int(self.cfg.overlap_ms)
 
     def clear(self, screen: str) -> None:
-        self.assignments.pop(screen, None)
-        self._pos.pop(screen, None)
-        self._next_due.pop(screen, None)
+        # Clearing any member of a span clears the whole span.
+        self._remove_screens([screen])
         self.apply()
 
     def stop_all(self) -> None:
@@ -135,13 +162,25 @@ class RotationController(QObject):
         self.apply()
 
     # -- describe current state (for the UI) ------------------------------- #
-    def describe(self, screen: str) -> str:
-        a = self.assignments.get(screen)
-        if not a:
-            return "—"
+    @staticmethod
+    def _describe_assignment(a: dict) -> str:
         if a["mode"] == "single":
             return f"fond : {a['id']}"
         return f"playlist : {a.get('playlist')}"
+
+    def describe(self, key: str) -> str:
+        a = self.assignments.get(key)
+        return self._describe_assignment(a) if a else "—"
+
+    def describe_for_screen(self, screen: str) -> str:
+        """What a single physical screen shows, following span membership."""
+        a = self.assignments.get(screen)
+        if a:
+            return self._describe_assignment(a)
+        for key, a in self.assignments.items():
+            if "," in key and screen in self._screens_of(key):
+                return self._describe_assignment(a) + " (étendu)"
+        return "—"
 
     def current_id(self, screen: str) -> str | None:
         a = self.assignments.get(screen)

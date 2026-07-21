@@ -76,16 +76,33 @@ def build_command(cfg: config.Config, screen: str, wid: str) -> list[str]:
     cmd = [BACKEND]
     if cfg.assets_dir:
         cmd += ["--assets-dir", cfg.assets_dir]
-    if cfg.silent:
+    if cfg.volume <= 0:
         cmd += ["--silent"]
+    else:
+        cmd += ["--volume", str(cfg.volume)]
     if cfg.fps and cfg.fps != 30:
         cmd += ["--fps", str(cfg.fps)]
     library_dir = cfg.library_path
     target = str(library_dir / wid) if library_dir else wid
-    cmd += ["--screen-root", screen, "--bg", target]
+    # A comma-joined key ("DP-1,HDMI-1") is a span: one wallpaper stretched
+    # across those screens via --screen-span; otherwise a single --screen-root.
+    if "," in screen:
+        cmd += ["--screen-span", screen, "--bg", target]
+    else:
+        cmd += ["--screen-root", screen, "--bg", target]
+    opts = config.load_render().get(wid, {})
+    # Per-wallpaper scaling mode (fill/fit/stretch); "default" omits the flag.
+    scaling = opts.get("scaling")
+    if scaling and scaling != "default":
+        cmd += ["--scaling", scaling]
     # Per-wallpaper property overrides (color, brightness, toggles, …).
     for key, value in config.load_properties().get(wid, {}).items():
         cmd += ["--set-property", f"{key}={library.format_property(value)}"]
+    # Per-wallpaper render toggles: each disabled feature adds its backend flag.
+    disabled = set(opts.get("disabled", []))
+    for feature in config.RENDER_FEATURES:
+        if feature in disabled:
+            cmd += [f"--disable-{feature}"]
     return cmd
 
 
