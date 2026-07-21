@@ -86,16 +86,24 @@ def _nvidia_busy() -> int | None:
 
 
 def gpu_busy_percent() -> int | None:
-    """Current GPU utilisation (0-100), or None if it can't be read.
+    """Current GPU utilisation (0-100) of the GPU that runs *other* work, or
+    None if it can't be read.
 
-    Reads AMD's amdgpu sysfs `gpu_busy_percent` first (fast, no subprocess);
-    falls back to `nvidia-smi` on NVIDIA's proprietary driver. Intel and
-    nouveau expose no simple percentage here, so the caller disables the
-    GPU-load trigger (the app-list trigger still works everywhere)."""
-    amd = _amd_busy()
-    if amd is not None:
-        return amd
-    return _nvidia_busy()
+    A discrete NVIDIA GPU, when present, is preferred over AMD's amdgpu sysfs.
+    This is deliberate, not a fallback order: on a hybrid laptop the wallpaper
+    is rendered by the compositor on the iGPU (which drives the display) while
+    games PRIME-offload to the NVIDIA dGPU. So the dGPU's load is a clean signal
+    of "a heavy app is running" with none of the wallpaper's own load — reading
+    the iGPU instead would self-trigger, since a live wallpaper alone can peg a
+    weak iGPU past the threshold. On a single-GPU machine only one source
+    reports, so the choice is moot. `_nvidia_busy()` is a no-op (no subprocess)
+    when nvidia-smi isn't installed, so pure-AMD machines pay nothing. Intel and
+    nouveau expose no percentage → None → the caller disables the GPU-load
+    trigger (the app-list trigger still works everywhere)."""
+    nv = _nvidia_busy()
+    if nv is not None:
+        return nv
+    return _amd_busy()
 
 
 def _read(path: str) -> str:

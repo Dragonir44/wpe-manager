@@ -61,7 +61,10 @@ Testé sur KDE Plasma 6 / Wayland (CachyOS), mais ne dépend d'aucune API KDE.
   - **charge GPU** (option, filet de secours pour les apps hors liste) — coupe
     les fonds quand l'utilisation GPU reste au-dessus d'un seuil, avec
     hystérésis pour éviter les allers-retours. Lecture via sysfs **amdgpu** ou
-    **`nvidia-smi`** (grisé sur les GPU non supportés).
+    **`nvidia-smi`** (grisé sur les GPU non supportés). Sur un **portable
+    hybride**, la dGPU NVIDIA est privilégiée : le fond tourne sur l'iGPU et les
+    jeux s'offloadent sur la dGPU, donc sa charge est un signal propre sans la
+    charge du fond lui-même.
 - **⚙ Réglages** : audio (muet), FPS, durée de transition globale, pause
   automatique, chemins de la bibliothèque, autostart, entrée du menu applications.
 
