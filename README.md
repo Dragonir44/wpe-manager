@@ -47,10 +47,12 @@ Testé sur KDE Plasma 6 / Wayland (CachyOS), mais ne dépend d'aucune API KDE.
   lancement via `--set-property` ; si le fond est affiché, il se recharge aussitôt.
 - **Réglages de rendu par fond** (section *Rendu* du panneau) : choisis le
   **cadrage** (`remplir` / `ajuster` / `étirer` / défaut — utile en multi-écran
-  ou ratio non standard) et, sur les fonds *scène*, désactive individuellement le
-  **parallaxe**, les **particules** ou l'**interaction souris** — quand un effet
-  passe mal sur un fond précis ou pour alléger le GPU. Enregistré par fond
-  (`--scaling`, `--disable-parallax/particles/mouse`) et appliqué à chaud.
+  ou ratio non standard), le traitement des **bords** de texture (`clamp` /
+  `border` / `repeat`) quand l'image ne couvre pas tout l'écran, et, sur les
+  fonds *scène*, désactive individuellement le **parallaxe**, les **particules**
+  ou l'**interaction souris** — quand un effet passe mal sur un fond précis ou
+  pour alléger le GPU. Enregistré par fond (`--scaling`, `--clamp`,
+  `--disable-parallax/particles/mouse`) et appliqué à chaud.
 - **Import depuis Wallpaper Engine** : récupère les playlists du `config.json`
   de WPE (extrait les IDs, ignore les chemins/moniteurs Windows non portables).
 - **Transition sans coupure** : le nouveau fond est affiché *par-dessus* l'ancien
@@ -75,7 +77,9 @@ Testé sur KDE Plasma 6 / Wayland (CachyOS), mais ne dépend d'aucune API KDE.
     hybride**, la dGPU NVIDIA est privilégiée : le fond tourne sur l'iGPU et les
     jeux s'offloadent sur la dGPU, donc sa charge est un signal propre sans la
     charge du fond lui-même.
-- **⚙ Réglages** : **volume** (0-100, 0 = muet), FPS, durée de transition
+- **⚙ Réglages** : **volume** (0-100, 0 = muet) avec deux options audio —
+  *garder le son quand une autre app joue* (`--noautomute`) et *désactiver la
+  réactivité audio* (`--no-audio-processing`) —, FPS, durée de transition
   globale, pause automatique, chemins de la bibliothèque, autostart, entrée du
   menu applications.
 
@@ -139,12 +143,13 @@ Chemins de la bibliothèque…** pour la pointer à la main.
 
 ## Fichiers de config
 
-- `~/.config/wpe-manager/config.json` — chemins, muet, FPS, transition.
+- `~/.config/wpe-manager/config.json` — chemins, audio (volume + options), FPS, transition.
 - `~/.config/wpe-manager/state.json` — assignations par écran (fond / playlist).
 - `~/.config/wpe-manager/playlists.json` — playlists.
 - `~/.config/wpe-manager/engine.json` — process backend en cours (par écran).
 - `~/.config/wpe-manager/metadata.json` — cache des résolutions (Steam Workshop).
 - `~/.config/wpe-manager/properties.json` — propriétés personnalisées par fond.
+- `~/.config/wpe-manager/render.json` — options de rendu par fond (cadrage, bords, effets désactivés).
 
 ## Autostart (restaurer les fonds à l'ouverture de session)
 

@@ -1249,6 +1249,12 @@ class MainWindow(QMainWindow):
         "fit": "Ajuster (fit)",
         "stretch": "Étirer (stretch)",
     }
+    _CLAMP_LABELS = {
+        "default": "Par défaut",
+        "clamp": "Étendre les bords (clamp)",
+        "border": "Bordure (border)",
+        "repeat": "Répéter (repeat)",
+    }
 
     def _build_render_box(self) -> QWidget:
         """The per-wallpaper 'Rendu' section of the properties panel.
@@ -1276,6 +1282,16 @@ class MainWindow(QMainWindow):
         self.pp_scaling.currentIndexChanged.connect(self._on_wp_opts_changed)
         scale_row.addWidget(self.pp_scaling, 1)
         lay.addLayout(scale_row)
+
+        # Clamp — texture edge handling; meaningful for every wallpaper type.
+        clamp_row = QHBoxLayout()
+        clamp_row.addWidget(QLabel("Bords :"))
+        self.pp_clamp = QComboBox()
+        for mode in config.CLAMP_MODES:
+            self.pp_clamp.addItem(self._CLAMP_LABELS[mode], mode)
+        self.pp_clamp.currentIndexChanged.connect(self._on_wp_opts_changed)
+        clamp_row.addWidget(self.pp_clamp, 1)
+        lay.addLayout(clamp_row)
 
         # Disable-toggles — grouped so they can hide for non-scene wallpapers.
         self._render_toggle_box = QFrame()
@@ -1308,6 +1324,12 @@ class MainWindow(QMainWindow):
         self.pp_scaling.setCurrentIndex(idx if idx >= 0 else 0)
         self.pp_scaling.blockSignals(False)
 
+        clamp = opts.get("clamp") or "default"
+        cidx = self.pp_clamp.findData(clamp)
+        self.pp_clamp.blockSignals(True)
+        self.pp_clamp.setCurrentIndex(cidx if cidx >= 0 else 0)
+        self.pp_clamp.blockSignals(False)
+
         is_scene = wp.type == "scene"
         self._render_toggle_box.setVisible(is_scene)
         disabled = set(opts.get("disabled", []))
@@ -1328,6 +1350,9 @@ class MainWindow(QMainWindow):
         mode = self.pp_scaling.currentData()
         if mode and mode != "default":
             entry["scaling"] = mode
+        clamp = self.pp_clamp.currentData()
+        if clamp and clamp != "default":
+            entry["clamp"] = clamp
         all_render = config.load_render()
         if entry:
             all_render[wp.id] = entry
@@ -1527,6 +1552,22 @@ class MainWindow(QMainWindow):
         vol_row.addWidget(self.volume_label)
         self._update_volume_label(self.cfg.volume)
         form.addRow("Volume :", vol_row)
+
+        self.noautomute_check = QCheckBox("Garder le son même quand une autre app joue")
+        self.noautomute_check.setToolTip(
+            "Par défaut le backend coupe l'audio du fond dès qu'une autre app "
+            "(jeu, vidéo…) joue du son. Coché : le fond garde son son (--noautomute).")
+        self.noautomute_check.setChecked(self.cfg.noautomute)
+        self.noautomute_check.toggled.connect(self._on_noautomute_changed)
+        form.addRow(self.noautomute_check)
+
+        self.no_audio_proc_check = QCheckBox("Désactiver la réactivité audio")
+        self.no_audio_proc_check.setToolTip(
+            "Coupe l'analyse du son système qui anime les fonds réactifs à "
+            "l'audio ; économise un peu de CPU (--no-audio-processing).")
+        self.no_audio_proc_check.setChecked(self.cfg.no_audio_processing)
+        self.no_audio_proc_check.toggled.connect(self._on_no_audio_proc_changed)
+        form.addRow(self.no_audio_proc_check)
 
         self.fps_spin = QSpinBox()
         self.fps_spin.setRange(5, 240)
@@ -2439,6 +2480,16 @@ class MainWindow(QMainWindow):
         self._update_volume_label(value)
         config.save_config(self.cfg)
         self._volume_apply_timer.start()  # debounced reapply (see settings dialog)
+
+    def _on_noautomute_changed(self, on: bool) -> None:
+        self.cfg.noautomute = bool(on)
+        config.save_config(self.cfg)
+        self.controller.apply()  # relaunches with/without --noautomute
+
+    def _on_no_audio_proc_changed(self, on: bool) -> None:
+        self.cfg.no_audio_processing = bool(on)
+        config.save_config(self.cfg)
+        self.controller.apply()  # relaunches with/without --no-audio-processing
 
     def _on_fps_changed(self, value: int) -> None:
         self.cfg.fps = value

@@ -80,6 +80,10 @@ def build_command(cfg: config.Config, screen: str, wid: str) -> list[str]:
         cmd += ["--silent"]
     else:
         cmd += ["--volume", str(cfg.volume)]
+        if cfg.noautomute:
+            cmd += ["--noautomute"]
+    if cfg.no_audio_processing:
+        cmd += ["--no-audio-processing"]
     if cfg.fps and cfg.fps != 30:
         cmd += ["--fps", str(cfg.fps)]
     library_dir = cfg.library_path
@@ -95,6 +99,10 @@ def build_command(cfg: config.Config, screen: str, wid: str) -> list[str]:
     scaling = opts.get("scaling")
     if scaling and scaling != "default":
         cmd += ["--scaling", scaling]
+    # Per-wallpaper texture clamp mode (clamp/border/repeat); "default" omits it.
+    clamp = opts.get("clamp")
+    if clamp and clamp != "default":
+        cmd += ["--clamp", clamp]
     # Per-wallpaper property overrides (color, brightness, toggles, …).
     for key, value in config.load_properties().get(wid, {}).items():
         cmd += ["--set-property", f"{key}={library.format_property(value)}"]

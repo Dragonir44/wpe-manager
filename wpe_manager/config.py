@@ -39,6 +39,10 @@ RENDER_FEATURES = ("parallax", "particles", "mouse")
 # Scaling modes accepted by the backend's --scaling flag. "default" means "don't
 # pass the flag" (let the backend decide). Applies to any wallpaper type.
 SCALING_MODES = ("default", "fill", "fit", "stretch")
+# Texture clamping modes accepted by the backend's --clamp flag; governs how the
+# image edges are handled when scaling doesn't cover the screen. "default" omits
+# the flag. Per wallpaper, alongside scaling.
+CLAMP_MODES = ("default", "clamp", "border", "repeat")
 
 # Steam roots we know how to look inside, in rough order of likelihood.
 _STEAM_ROOTS = [
@@ -123,6 +127,12 @@ class Config:
     # migrate old configs (see load_config).
     silent: bool = False
     volume: int = 15
+    # Keep the wallpaper's own audio playing even when another app plays sound
+    # (backend --noautomute). Off = the backend auto-mutes it, the default.
+    noautomute: bool = False
+    # Disable audio-reactive processing (backend --no-audio-processing): wallpapers
+    # that react to system audio stop reacting, saving a bit of CPU.
+    no_audio_processing: bool = False
     fps: int = 30
     # Overlap window (ms) when swapping a screen's wallpaper: the new one is
     # started and left to render for this long before the old is killed, so
@@ -284,10 +294,11 @@ def save_properties(data: dict[str, dict]) -> None:
 def load_render() -> dict[str, dict]:
     """Per-wallpaper display options: {wallpaper_id: {...}}.
 
-    Each entry may hold ``"disabled"`` (a list of turned-off render features)
-    and ``"scaling"`` (a non-default scaling mode). The 0.8.0 format stored the
-    value as a bare list of disabled features; it's migrated transparently.
-    Empty entries are dropped so absent == all-defaults.
+    Each entry may hold ``"disabled"`` (a list of turned-off render features),
+    ``"scaling"`` (a non-default scaling mode) and ``"clamp"`` (a non-default
+    texture clamp mode). The 0.8.0 format stored the value as a bare list of
+    disabled features; it's migrated transparently. Empty entries are dropped so
+    absent == all-defaults.
     """
     if not RENDER_FILE.is_file():
         return {}
@@ -310,6 +321,9 @@ def load_render() -> dict[str, dict]:
         scaling = v.get("scaling")
         if scaling in SCALING_MODES and scaling != "default":
             entry["scaling"] = scaling
+        clamp = v.get("clamp")
+        if clamp in CLAMP_MODES and clamp != "default":
+            entry["clamp"] = clamp
         if entry:
             out[str(k)] = entry
     return out
